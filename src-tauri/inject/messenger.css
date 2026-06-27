@@ -1,0 +1,54 @@
+/*
+ * Carrier — noise-stripping stylesheet for facebook.com/messages
+ *
+ * Clean-room implementation. These selectors target Facebook's *public* DOM
+ * (ARIA roles / labels) to hide the surrounding Facebook chrome so the window
+ * behaves like a dedicated Messenger client. No third-party code is reused.
+ *
+ * The tricky bit: Facebook reuses div[role="banner"] both for the top site
+ * navigation AND, when a photo/video media viewer dialog is open, for that
+ * viewer's control bar. So we hide the banner normally, but restore it while a
+ * media dialog is open.
+ */
+
+/* Kill the page-level scrollbar the hidden header would otherwise leave behind. */
+html:has(body) {
+  overflow: hidden !important;
+}
+
+/* Default state (no media viewer open): collapse the header and hide the banner. */
+:root,
+.__fb-light-mode,
+.__fb-dark-mode {
+  --header-height: 0px !important;
+}
+
+body:not(:has(div[role="dialog"][aria-label]:not([hidden] *))) div[role="banner"] {
+  display: none !important;
+}
+
+/* Media viewer open: bring back a slim header so its controls are reachable. */
+body:has(div[role="dialog"][aria-label]:not([hidden] *)) :root,
+body:has(div[role="dialog"][aria-label]:not([hidden] *)) .__fb-light-mode,
+body:has(div[role="dialog"][aria-label]:not([hidden] *)) .__fb-dark-mode {
+  --header-height: 56px !important;
+}
+
+/* Inside the banner, hide the bits that are pure Facebook (logo, global search,
+   center nav links, the nav button cluster) but leave dialog controls alone. */
+div[role="banner"] a[aria-label="Facebook"],
+div[role="banner"] label:has(input[type="search"]),
+div[role="banner"] a[role="link"][aria-label][tabindex="0"],
+div[role="banner"] div[role="navigation"] {
+  display: none !important;
+}
+
+/* Remove the bright focus ring inside the media viewer. */
+div[role="dialog"][aria-label] {
+  --focus-ring-shadow-default: none !important;
+}
+
+/* Match the calmer grey active-thread highlight from the old messenger.com. */
+.__fb-dark-mode {
+  --hosted-view-selected-state: #3a3a3a !important;
+}

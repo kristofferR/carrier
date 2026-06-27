@@ -1,0 +1,15 @@
+# Rust / Tauri
+/src-tauri/target/
+/src-tauri/gen/schemas/
+
+# Node (lockfile is committed)
+/node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build output
+/dist-bundle/
+*.dmg
+*.app.tar.gz

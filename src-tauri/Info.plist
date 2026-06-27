@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the generated app bundle's Info.plist by Tauri at build time. -->
+<plist version="1.0">
+<dict>
+  <key>NSCameraUsageDescription</key>
+  <string>Carrier needs camera access for Messenger video calls.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Carrier needs microphone access for Messenger voice and video calls.</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <true/>
+  </dict>
+</dict>
+</plist>
