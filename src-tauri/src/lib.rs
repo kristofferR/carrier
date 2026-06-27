@@ -115,7 +115,8 @@ fn load_settings_early() -> Settings {
 fn dirs_config_dir() -> Option<std::path::PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/Application Support"))
+        std::env::var_os("HOME")
+            .map(|h| std::path::PathBuf::from(h).join("Library/Application Support"))
     }
     #[cfg(target_os = "windows")]
     {
@@ -125,7 +126,9 @@ fn dirs_config_dir() -> Option<std::path::PathBuf> {
     {
         std::env::var_os("XDG_CONFIG_HOME")
             .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+            .or_else(|| {
+                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
+            })
     }
 }
 
@@ -238,16 +241,27 @@ fn is_auth_url(url: &Url) -> bool {
         "login.microsoftonline.com",
         "appleid.apple.com",
     ];
-    if AUTH_HOSTS.iter().any(|h| host == *h || host.ends_with(&format!(".{h}"))) {
+    if AUTH_HOSTS
+        .iter()
+        .any(|h| host == *h || host.ends_with(&format!(".{h}")))
+    {
         return true;
     }
     // Hosts where an OAuth path disambiguates a login flow from ordinary links.
     // Scoped to these hosts so a shared `example.com/oauth` link is NOT kept
     // in-app.
     const OAUTH_HOSTS: &[&str] = &["github.com", "gitlab.com", "bitbucket.org"];
-    if OAUTH_HOSTS.iter().any(|h| host == *h || host.ends_with(&format!(".{h}"))) {
+    if OAUTH_HOSTS
+        .iter()
+        .any(|h| host == *h || host.ends_with(&format!(".{h}")))
+    {
         let path = url.path().to_ascii_lowercase();
-        const PATHS: &[&str] = &["/login/oauth", "/oauth/authorize", "/o/oauth2", "/auth/authorize"];
+        const PATHS: &[&str] = &[
+            "/login/oauth",
+            "/oauth/authorize",
+            "/o/oauth2",
+            "/auth/authorize",
+        ];
         return PATHS.iter().any(|p| path.contains(p));
     }
     false
@@ -274,7 +288,9 @@ fn is_internal(url: &Url) -> bool {
         return true;
     }
     // Reject hostless HTTP(S) rather than treating it as internal.
-    let Some(host) = url.host_str() else { return false };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
     let host = host.strip_prefix("www.").unwrap_or(host);
     const INTERNAL_SUFFIXES: &[&str] = &[
         "facebook.com",
@@ -311,7 +327,10 @@ fn is_public_http(url: &Url) -> bool {
         Some(url::Host::Ipv6(ip)) => {
             // IPv4-mapped addresses (::ffff:a.b.c.d) get the IPv4 rules.
             if let Some(v4) = ip.to_ipv4_mapped() {
-                return !(v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified());
+                return !(v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_unspecified());
             }
             let seg = ip.segments();
             let unique_local = (seg[0] & 0xfe00) == 0xfc00; // fc00::/7
@@ -336,7 +355,10 @@ fn fetch_public(url: &str, cap: u64) -> Result<Vec<u8>, String> {
         .timeout_read(Duration::from_secs(60))
         .redirects(0)
         .build();
-    let resp = agent.get(url).call().map_err(|e| format!("fetch failed: {e}"))?;
+    let resp = agent
+        .get(url)
+        .call()
+        .map_err(|e| format!("fetch failed: {e}"))?;
     if resp.status() >= 300 {
         return Err("refusing to follow a redirect".into());
     }
@@ -384,7 +406,10 @@ fn sanitize_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| {
-            if matches!(c, '/' | '\\' | '\0' | ':' | '<' | '>' | '"' | '|' | '?' | '*') {
+            if matches!(
+                c,
+                '/' | '\\' | '\0' | ':' | '<' | '>' | '"' | '|' | '?' | '*'
+            ) {
                 '_'
             } else {
                 c
@@ -415,7 +440,11 @@ fn unique_path(p: std::path::PathBuf) -> std::path::PathBuf {
     if !p.exists() {
         return p;
     }
-    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("download").to_string();
+    let stem = p
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("download")
+        .to_string();
     let ext = p
         .extension()
         .and_then(|s| s.to_str())
@@ -441,7 +470,11 @@ fn get_settings(state: State<AppState>) -> Settings {
 }
 
 #[tauri::command]
-fn set_settings(app: tauri::AppHandle, state: State<AppState>, new: Settings) -> Result<Settings, String> {
+fn set_settings(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    new: Settings,
+) -> Result<Settings, String> {
     {
         let mut guard = state.settings.lock().unwrap();
         *guard = new.clone();
@@ -665,7 +698,7 @@ fn build_app_window(
     .min_inner_size(420.0, 520.0)
     .background_color(splash_background())
     .user_agent(user_agent())
-    .initialization_script(&init_script(settings))
+    .initialization_script(init_script(settings))
     .on_navigation(|url| {
         // External tracking redirect -> open the real (web-only) destination.
         if let Some(real) = unwrap_tracking(url) {
@@ -756,7 +789,11 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .close_window()
         .build()?;
 
-    let paste_match = mi("paste_match_style", "Paste and Match Style", Some("CmdOrCtrl+Shift+Alt+V"))?;
+    let paste_match = mi(
+        "paste_match_style",
+        "Paste and Match Style",
+        Some("CmdOrCtrl+Shift+Alt+V"),
+    )?;
     let edit = SubmenuBuilder::new(app, "Edit")
         .undo()
         .redo()
@@ -769,12 +806,20 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .build()?;
 
     let reload = mi("reload", "Reload", Some("CmdOrCtrl+R"))?;
-    let clear_cache = mi("clear_cache", "Clear Cache & Restart", Some("CmdOrCtrl+Shift+Backspace"))?;
+    let clear_cache = mi(
+        "clear_cache",
+        "Clear Cache & Restart",
+        Some("CmdOrCtrl+Shift+Backspace"),
+    )?;
     let zreset = mi("zoom_reset", "Actual Size", Some("CmdOrCtrl+0"))?;
     let zin = mi("zoom_in", "Zoom In", Some("CmdOrCtrl+="))?;
     let zout = mi("zoom_out", "Zoom Out", Some("CmdOrCtrl+-"))?;
     let aot = mi("always_on_top", "Toggle Always on Top", None)?;
-    let devtools = mi("devtools", "Toggle Developer Tools", Some("CmdOrCtrl+Alt+I"))?;
+    let devtools = mi(
+        "devtools",
+        "Toggle Developer Tools",
+        Some("CmdOrCtrl+Alt+I"),
+    )?;
     let view = {
         let b = SubmenuBuilder::new(app, "View")
             .item(&reload)
@@ -864,7 +909,10 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
         }
         "new_window" => {
             let s = app.state::<AppState>().settings.lock().unwrap().clone();
-            let n = app.state::<AppState>().next_window.fetch_add(1, Ordering::SeqCst);
+            let n = app
+                .state::<AppState>()
+                .next_window
+                .fetch_add(1, Ordering::SeqCst);
             let _ = build_app_window(app, &format!("win-{n}"), &s);
         }
         "clear_cache" => {
@@ -885,7 +933,8 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
                 }
             }
         }
-        "devtools" => {
+        "devtools" =>
+        {
             #[cfg(debug_assertions)]
             if let Some(w) = app.get_webview_window("main") {
                 w.open_devtools();
@@ -1014,4 +1063,94 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Carrier");
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn u(s: &str) -> Url {
+        Url::parse(s).unwrap()
+    }
+
+    #[test]
+    fn public_http_allows_public_blocks_private_and_non_web() {
+        assert!(is_public_http(&u("https://scontent.fbcdn.net/v/x.jpg")));
+        assert!(is_public_http(&u("https://1.1.1.1/x")));
+        // loopback / private / link-local / IPv6 ULA / IPv4-mapped
+        assert!(!is_public_http(&u("http://localhost/x")));
+        assert!(!is_public_http(&u("https://foo.localhost/x")));
+        assert!(!is_public_http(&u("http://127.0.0.1/x")));
+        assert!(!is_public_http(&u("http://10.0.0.5/x")));
+        assert!(!is_public_http(&u("http://192.168.1.1/x")));
+        assert!(!is_public_http(&u("http://169.254.1.1/x")));
+        assert!(!is_public_http(&u("http://[::1]/x")));
+        assert!(!is_public_http(&u("http://[fd00::1]/x")));
+        assert!(!is_public_http(&u("http://[fe80::1]/x")));
+        assert!(!is_public_http(&u("http://[::ffff:127.0.0.1]/x")));
+        // non-web schemes
+        assert!(!is_public_http(&u("ftp://example.com/x")));
+        assert!(!is_public_http(&u("file:///etc/passwd")));
+    }
+
+    #[test]
+    fn internal_allows_messenger_blocks_dangerous() {
+        assert!(is_internal(&u("https://www.facebook.com/messages")));
+        assert!(is_internal(&u("https://web.facebook.com/x")));
+        assert!(is_internal(&u("https://accounts.google.com/o/oauth2/auth")));
+        assert!(is_internal(&u("about:blank")));
+        assert!(!is_internal(&u("https://example.com/")));
+        assert!(!is_internal(&u("data:text/html,<script>1</script>")));
+        assert!(!is_internal(&u("javascript:alert(1)")));
+    }
+
+    #[test]
+    fn auth_scoped_to_known_hosts() {
+        assert!(is_auth_url(&u("https://accounts.google.com/anything")));
+        assert!(is_auth_url(&u("https://appleid.apple.com/auth/authorize")));
+        assert!(is_auth_url(&u(
+            "https://github.com/login/oauth/authorize?x=1"
+        )));
+        // ordinary links must NOT be treated as auth
+        assert!(!is_auth_url(&u("https://github.com/user/repo")));
+        assert!(!is_auth_url(&u("https://example.com/oauth/authorize")));
+        assert!(!is_auth_url(&u("https://example.com/login")));
+    }
+
+    #[test]
+    fn sanitize_blocks_traversal_and_windows_drive() {
+        let a = sanitize_filename("../../etc/passwd");
+        assert!(!a.contains('/') && !a.contains('\\'));
+        let b = sanitize_filename("C:evil.exe");
+        assert!(!b.contains(':'));
+        assert_eq!(sanitize_filename("   "), "download");
+        assert_eq!(sanitize_filename("..."), "download");
+        assert_eq!(sanitize_filename("photo.png"), "photo.png");
+    }
+
+    #[test]
+    fn tracking_redirect_is_unwrapped() {
+        let url = u("https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com%2Fa&h=AT0");
+        assert_eq!(
+            unwrap_tracking(&url).as_deref(),
+            Some("https://example.com/a")
+        );
+        assert_eq!(
+            unwrap_tracking(&u("https://www.facebook.com/messages")),
+            None
+        );
+    }
+
+    #[test]
+    fn filename_keeps_real_extension() {
+        assert_eq!(
+            filename_from_url(&u("https://x.com/a/video.mp4?dl=1")),
+            "video.mp4"
+        );
+        assert_eq!(filename_from_url(&u("https://x.com/")), "download");
+    }
 }
