@@ -23,7 +23,7 @@ use url::Url;
 /// The page we wrap.
 const HOME_URL: &str = "https://www.facebook.com/messages";
 
-/// Injected assets (independently written; see `inject/`).
+/// Injected assets (see `inject/`).
 const INJECT_CSS: &str = include_str!("../inject/messenger.css");
 const INJECT_JS: &str = include_str!("../inject/messenger.js");
 const INJECT_PANEL: &str = include_str!("../inject/panel.js");
@@ -63,6 +63,14 @@ struct Settings {
     /// next launch (takes effect after restart).
     multi_instance: bool,
     spellcheck: bool,
+    /// Show the unread-message count on the Dock/taskbar icon.
+    unread_badge: bool,
+    /// Force the Messenger theme: "system" (follow FB), "light", or "dark".
+    theme: String,
+    /// Hide the conversation-info side panel for a roomier chat view.
+    compact: bool,
+    /// macOS: run as a menu-bar app with no Dock icon (requires the tray).
+    menu_bar_only: bool,
 }
 
 impl Default for Settings {
@@ -75,6 +83,10 @@ impl Default for Settings {
             hide_on_close: true,
             multi_instance: false,
             spellcheck: true,
+            unread_badge: true,
+            theme: "system".into(),
+            compact: false,
+            menu_bar_only: false,
         }
     }
 }
@@ -148,20 +160,37 @@ fn show_main(app: &tauri::AppHandle) {
     }
 }
 
+/// Show the main window if it's hidden/unfocused, or hide it if it's already the
+/// focused window — so a tray click toggles the app.
+fn toggle_main(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let visible = window.is_visible().unwrap_or(false);
+        let focused = window.is_focused().unwrap_or(false);
+        if visible && focused {
+            let _ = window.hide();
+        } else {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }
+}
+
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<TrayIcon> {
-    let show_item = MenuItem::with_id(app, "show", "Open Carrier", true, None::<&str>)?;
+    // Left-click toggles the window; right-click offers only Quit (showing is the
+    // click itself, so a separate "Open" item would be redundant).
     let quit_item = MenuItem::with_id(app, "quit", "Quit Carrier", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+    let menu = Menu::with_items(app, &[&quit_item])?;
 
     TrayIconBuilder::with_id("carrier-tray")
         .tooltip("Carrier")
         .icon(app.default_window_icon().expect("bundled icon").clone())
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show_main(app),
-            "quit" => app.exit(0),
-            _ => {}
+        .on_menu_event(|app, event| {
+            if event.id.as_ref() == "quit" {
+                app.exit(0);
+            }
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -170,7 +199,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<TrayIcon> {
                 ..
             } = event
             {
-                show_main(tray.app_handle());
+                toggle_main(tray.app_handle());
             }
         })
         .build(app)
@@ -190,12 +219,16 @@ fn sync_autostart(app: &tauri::AppHandle, want: bool) -> Result<(), String> {
 /// separately by [`sync_autostart`]; everything here is best-effort.
 fn apply_settings(app: &tauri::AppHandle, s: &Settings) {
     let settings_json = serde_json::to_string(s).ok();
+    let theme = theme_for(s);
     for (label, window) in app.webview_windows() {
         // Apply to every window (incl. the Settings dialog) so toggling Always
         // on Top from the dialog doesn't leave the dialog stuck behind the
         // now-topmost Messenger windows.
         let _ = window.set_always_on_top(s.always_on_top);
         if label != "settings" {
+            // Drive the native window chrome (incl. the macOS title bar) from the
+            // theme preference so it matches the page instead of staying light.
+            let _ = window.set_theme(theme);
             // Push the new prefs to the running page so JS-side settings
             // (spell-check) refresh without a reload.
             if let Some(ref json) = settings_json {
@@ -206,10 +239,12 @@ fn apply_settings(app: &tauri::AppHandle, s: &Settings) {
         }
     }
 
-    // Tray: create or tear down to match `show_tray`.
+    // Tray: create or tear down. Menu-bar-only needs one (it's the only way to
+    // reach a Dock-less app), so force it on then.
+    let want_tray = s.show_tray || s.menu_bar_only;
     let state = app.state::<AppState>();
     let mut tray = state.tray.lock().unwrap();
-    match (s.show_tray, tray.is_some()) {
+    match (want_tray, tray.is_some()) {
         (true, false) => {
             if let Ok(t) = build_tray(app) {
                 *tray = Some(t);
@@ -225,6 +260,17 @@ fn apply_settings(app: &tauri::AppHandle, s: &Settings) {
             *tray = None;
         }
         _ => {}
+    }
+    drop(tray);
+
+    // macOS: hide/show the Dock icon (menu-bar-only mode).
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(if s.menu_bar_only {
+            tauri::ActivationPolicy::Accessory
+        } else {
+            tauri::ActivationPolicy::Regular
+        });
     }
 }
 
@@ -556,10 +602,29 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<String, String> {
 // Window
 // ---------------------------------------------------------------------------
 
+/// The window/chrome theme to apply for a given preference: an explicit
+/// light/dark, or `None` to follow the system.
+fn theme_for(s: &Settings) -> Option<tauri::Theme> {
+    match s.theme.as_str() {
+        "dark" => Some(tauri::Theme::Dark),
+        "light" => Some(tauri::Theme::Light),
+        _ => None,
+    }
+}
+
+/// True when the window should render dark (forced dark, or system-dark).
+fn is_dark(s: &Settings) -> bool {
+    match s.theme.as_str() {
+        "dark" => true,
+        "light" => false,
+        _ => matches!(dark_light::detect(), dark_light::Mode::Dark),
+    }
+}
+
 /// A theme-appropriate window background so there's no white flash before the
 /// remote page paints (Facebook glares white in dark mode while loading).
-fn splash_background() -> Color {
-    if matches!(dark_light::detect(), dark_light::Mode::Dark) {
+fn splash_background(s: &Settings) -> Color {
+    if is_dark(s) {
         Color(24, 25, 26, 255) // Facebook dark
     } else {
         Color(255, 255, 255, 255)
@@ -580,7 +645,8 @@ fn build_app_window(
     .title("Carrier")
     .inner_size(1200.0, 780.0)
     .min_inner_size(420.0, 520.0)
-    .background_color(splash_background())
+    .theme(theme_for(settings))
+    .background_color(splash_background(settings))
     .user_agent(user_agent())
     .initialization_script(init_script(settings))
     .on_navigation(|url| {
@@ -689,11 +755,8 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .build()?;
 
     let new_window = mi("new_window", "New Window", Some("CmdOrCtrl+N"))?;
-    let print = mi("print", "Print…", Some("CmdOrCtrl+P"))?;
     let file = SubmenuBuilder::new(app, "File")
         .item(&new_window)
-        .separator()
-        .item(&print)
         .separator()
         .close_window()
         .build()?;
@@ -723,6 +786,17 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let zreset = mi("zoom_reset", "Actual Size", Some("CmdOrCtrl+0"))?;
     let zin = mi("zoom_in", "Zoom In", Some("CmdOrCtrl+="))?;
     let zout = mi("zoom_out", "Zoom Out", Some("CmdOrCtrl+-"))?;
+    let theme_sys = mi("theme_system", "System", None)?;
+    let theme_light = mi("theme_light", "Light", None)?;
+    let theme_dark = mi("theme_dark", "Dark", None)?;
+    let theme_menu = SubmenuBuilder::new(app, "Theme")
+        .item(&theme_sys)
+        .item(&theme_light)
+        .item(&theme_dark)
+        .build()?;
+    // No accelerator here: Cmd/Ctrl+Shift+S is handled page-side (works in
+    // menu-bar-only mode too); a menu accelerator would double-fire with it.
+    let compact = mi("compact", "Toggle Compact Mode (⇧⌘S)", None)?;
     let aot = mi("always_on_top", "Toggle Always on Top", None)?;
     let devtools = mi(
         "devtools",
@@ -738,24 +812,14 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             .item(&zin)
             .item(&zout)
             .separator()
+            .item(&theme_menu)
+            .item(&compact)
             .item(&aot);
         #[cfg(debug_assertions)]
         let b = b.separator().item(&devtools);
         let _ = &devtools;
         b.build()?
     };
-
-    let back = mi("back", "Back", Some("CmdOrCtrl+["))?;
-    let fwd = mi("forward", "Forward", Some("CmdOrCtrl+]"))?;
-    let home = mi("home", "Home", Some("CmdOrCtrl+Shift+H"))?;
-    let copy_url = mi("copy_url", "Copy Current URL", None)?;
-    let history = SubmenuBuilder::new(app, "History")
-        .item(&back)
-        .item(&fwd)
-        .separator()
-        .item(&home)
-        .item(&copy_url)
-        .build()?;
 
     let maximize = mi("maximize", "Zoom", None)?;
     let window = SubmenuBuilder::new(app, "Window")
@@ -765,7 +829,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .close_window()
         .build()?;
 
-    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &history, &window])
+    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window])
 }
 
 /// The focused Messenger window (a `main`/`win-*` window), falling back to
@@ -777,6 +841,19 @@ fn target_window(app: &tauri::AppHandle) -> Option<WebviewWindow> {
         .find(|(label, w)| label.as_str() != "settings" && w.is_focused().unwrap_or(false))
         .map(|(_, w)| w)
         .or_else(|| app.get_webview_window("main"))
+}
+
+/// Apply a settings change made from the native menu: mutate, persist, re-apply.
+/// (Used for view-style toggles — not autostart, which syncs separately.)
+fn mutate_settings(app: &tauri::AppHandle, f: impl FnOnce(&mut Settings)) {
+    let state = app.state::<AppState>();
+    let mut s = state.settings.lock().unwrap().clone();
+    f(&mut s);
+    if let Err(e) = save_settings(app, &s) {
+        eprintln!("carrier: failed to save settings: {e}");
+    }
+    *state.settings.lock().unwrap() = s.clone();
+    apply_settings(app, &s);
 }
 
 fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
@@ -791,25 +868,17 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
             tauri::async_runtime::spawn(async move { show_settings_window(&app) });
         }
         "reload" => eval("location.reload()"),
-        "back" => eval("history.back()"),
-        "forward" => eval("history.forward()"),
-        "home" => eval(&format!("location.assign('{HOME_URL}')")),
         "zoom_in" => eval("window.__carrierZoomIn && window.__carrierZoomIn()"),
         "zoom_out" => eval("window.__carrierZoomOut && window.__carrierZoomOut()"),
         "zoom_reset" => eval("window.__carrierZoomReset && window.__carrierZoomReset()"),
-        "copy_url" => eval(
-            "navigator.clipboard && navigator.clipboard.writeText(location.href); \
-             window.__carrierToast && window.__carrierToast('Link copied')",
-        ),
         "paste_match_style" => eval(
             "navigator.clipboard && navigator.clipboard.readText().then(function (t) { \
              document.execCommand('insertText', false, t); })",
         ),
-        "print" => {
-            if let Some(w) = target_window(app) {
-                let _ = w.print();
-            }
-        }
+        "theme_system" => mutate_settings(app, |s| s.theme = "system".into()),
+        "theme_light" => mutate_settings(app, |s| s.theme = "light".into()),
+        "theme_dark" => mutate_settings(app, |s| s.theme = "dark".into()),
+        "compact" => mutate_settings(app, |s| s.compact = !s.compact),
         "maximize" => {
             if let Some(w) = target_window(app) {
                 if w.is_maximized().unwrap_or(false) {
@@ -836,20 +905,7 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
             clear_cache(app);
             app.restart();
         }
-        "always_on_top" => {
-            let state = app.state::<AppState>();
-            let mut s = state.settings.lock().unwrap().clone();
-            s.always_on_top = !s.always_on_top;
-            *state.settings.lock().unwrap() = s.clone();
-            if let Err(e) = save_settings(app, &s) {
-                eprintln!("carrier: failed to save settings: {e}");
-            }
-            for (label, w) in app.webview_windows() {
-                if label != "settings" {
-                    let _ = w.set_always_on_top(s.always_on_top);
-                }
-            }
-        }
+        "always_on_top" => mutate_settings(app, |s| s.always_on_top = !s.always_on_top),
         "devtools" =>
         {
             #[cfg(debug_assertions)]
@@ -1002,6 +1058,32 @@ pub fn run() {
                         }
                     }
                 });
+            });
+
+            // Unread count from the page → tray tooltip (the Dock badge is set
+            // page-side; this keeps the tray useful in menu-bar-only mode).
+            let h = app.handle().clone();
+            app.listen_any("carrier:unread", move |event| {
+                let n: i64 = event.payload().trim().parse().unwrap_or(0);
+                if let Some(tray) = h.state::<AppState>().tray.lock().unwrap().as_ref() {
+                    let tip = if n > 0 {
+                        format!("Carrier — {n} unread")
+                    } else {
+                        "Carrier".to_string()
+                    };
+                    let _ = tray.set_tooltip(Some(&tip));
+                }
+            });
+
+            // Cmd/Ctrl+Shift+S on the page toggles compact mode; persist it.
+            let h = app.handle().clone();
+            app.listen_any("carrier:toggle-compact", move |_| {
+                let state = h.state::<AppState>();
+                let mut s = state.settings.lock().unwrap().clone();
+                s.compact = !s.compact;
+                let _ = save_settings(&h, &s);
+                *state.settings.lock().unwrap() = s.clone();
+                apply_settings(&h, &s);
             });
 
             Ok(())
