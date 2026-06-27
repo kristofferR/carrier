@@ -72,14 +72,31 @@
       let settings = {};
       const setStatus = (m) => (document.getElementById("status").textContent = m || "");
 
-      async function persist() {
+      async function refresh() {
         try {
-          await invoke("set_settings", { new: settings });
+          settings = await invoke("get_settings");
+          render();
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      async function persist(key, value) {
+        try {
+          // Re-read first so we don't clobber a change made elsewhere (e.g.
+          // View → Toggle Always on Top) with a stale snapshot.
+          const fresh = await invoke("get_settings");
+          fresh[key] = value;
+          settings = await invoke("set_settings", { new: fresh });
+          render();
           setStatus("Saved.");
           setTimeout(() => setStatus(""), 1200);
         } catch (e) {
-          setStatus("Could not save.");
+          // Surface the real reason (e.g. autostart registration failed) and
+          // re-sync the checkboxes with what was actually persisted.
+          setStatus(String(e && e.message ? e.message : e));
           console.error(e);
+          await refresh();
         }
       }
 
@@ -92,7 +109,7 @@
           const cb = document.createElement("input");
           cb.type = "checkbox";
           cb.checked = !!settings[key];
-          cb.onchange = () => { settings[key] = cb.checked; persist(); };
+          cb.onchange = () => persist(key, cb.checked);
           const text = document.createElement("div");
           text.innerHTML = `<div class="label">${label}</div><div class="hint">${hint}</div>`;
           row.append(cb, text);
@@ -108,10 +125,14 @@
           setStatus("Reset to defaults.");
           setTimeout(() => setStatus(""), 1200);
         } catch (err) {
-          setStatus("Could not reset.");
+          setStatus(String(err && err.message ? err.message : err));
           console.error(err);
+          await refresh();
         }
       };
+
+      // Pick up changes made elsewhere (e.g. the View menu) when refocused.
+      window.addEventListener("focus", refresh);
 
       document.getElementById("check").onclick = async () => {
         setStatus("Checking for updates…");

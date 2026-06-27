@@ -178,8 +178,9 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<TrayIcon> {
         .build(app)
 }
 
-/// Apply settings that have an immediate runtime effect.
-fn apply_settings(app: &tauri::AppHandle, s: &Settings) {
+/// Apply settings that have an immediate runtime effect. Returns an error if a
+/// user-visible step (registering autostart) fails, so the caller can report it.
+fn apply_settings(app: &tauri::AppHandle, s: &Settings) -> Result<(), String> {
     let settings_json = serde_json::to_string(s).ok();
     for (label, window) in app.webview_windows() {
         // Apply to every window (incl. the Settings dialog) so toggling Always
@@ -197,13 +198,13 @@ fn apply_settings(app: &tauri::AppHandle, s: &Settings) {
         }
     }
 
-    // Autostart (Start on System Startup).
+    // Autostart (Start on System Startup) — capture the result to surface it.
     let mgr = app.autolaunch();
-    if s.autostart {
-        let _ = mgr.enable();
+    let autostart = if s.autostart {
+        mgr.enable()
     } else {
-        let _ = mgr.disable();
-    }
+        mgr.disable()
+    };
 
     // Tray: create or tear down to match `show_tray`.
     let state = app.state::<AppState>();
@@ -222,6 +223,10 @@ fn apply_settings(app: &tauri::AppHandle, s: &Settings) {
         }
         _ => {}
     }
+
+    autostart.map_err(|e| {
+        format!("Settings saved, but Start on System Startup couldn't be updated: {e}")
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -462,7 +467,7 @@ fn set_settings(
     // failed save can't leave the app applying settings it didn't store.
     save_settings(&app, &new)?;
     *state.settings.lock().unwrap() = new.clone();
-    apply_settings(&app, &new);
+    apply_settings(&app, &new)?;
     Ok(new)
 }
 
@@ -472,7 +477,7 @@ fn reset_settings(app: tauri::AppHandle, state: State<AppState>) -> Result<Setti
     let def = Settings::default();
     save_settings(&app, &def)?;
     *state.settings.lock().unwrap() = def.clone();
-    apply_settings(&app, &def);
+    apply_settings(&app, &def)?;
     Ok(def)
 }
 
@@ -1074,7 +1079,7 @@ pub fn run() {
                 }
             });
 
-            apply_settings(app.handle(), &settings);
+            let _ = apply_settings(app.handle(), &settings);
 
             // Start hidden only when a tray was actually created to reopen from.
             let has_tray = app.state::<AppState>().tray.lock().unwrap().is_some();
