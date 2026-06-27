@@ -1027,6 +1027,14 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
+                // Persist geometry only — NOT visibility, so the app always shows
+                // its window on launch (unless Start to Tray) rather than coming
+                // back hidden after a previous hide-to-tray.
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
                 .with_denylist(&["settings"]) // fixed-size dialog; don't persist its geometry
                 .build(),
         )
