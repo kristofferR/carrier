@@ -22,6 +22,7 @@
   "permissions": [
     "core:default",
     "core:window:allow-set-theme",
+    "core:window:allow-set-badge-count",
     "notification:default",
     "window-state:default",
     "opener:allow-open-url"

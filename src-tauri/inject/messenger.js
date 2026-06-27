@@ -81,6 +81,10 @@
     invoke("plugin:opener|open_url", { url, with: null })?.catch?.(() => {});
   const notify = (options) =>
     invoke("plugin:notification|notify", { options })?.catch?.(() => {});
+  // Page can't call Carrier's own commands (remote origin) but can emit events
+  // that Rust listeners handle.
+  const emit = (event) =>
+    invoke("plugin:event|emit", { event, payload: null })?.catch?.(() => {});
 
   // Expose zoom controls so the native menu (View ▸ Zoom) can drive them.
   window.__carrierZoomIn = zoomIn;
@@ -101,10 +105,36 @@
       } else if (e.key === "F2") {
         e.preventDefault();
         window.__carrierCheckUpdates?.();
+      } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+        // Cmd/Ctrl+1–9: jump to the Nth conversation in the list.
+        const target = chatRows()[Number(e.key) - 1];
+        if (target) {
+          e.preventDefault();
+          target.click();
+        }
+      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.code === "KeyS") {
+        // Cmd/Ctrl+Shift+S: toggle compact mode (persisted by Rust).
+        e.preventDefault();
+        emit("carrier:toggle-compact");
       }
     },
     true,
   );
+
+  // Visible conversation links in the left chat list, in list order.
+  function chatRows() {
+    const seen = new Set();
+    const out = [];
+    for (const a of document.querySelectorAll('[role="grid"] a[href*="/t/"], [role="navigation"] a[href*="/t/"]')) {
+      const href = a.getAttribute("href");
+      if (!href || seen.has(href)) continue;
+      const r = a.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue; // skip hidden
+      seen.add(href);
+      out.push(a);
+    }
+    return out;
+  }
 
   /* --------------------------- Link handling ---------------------------- */
   // External links open in the real browser (Facebook's l.php tracking
@@ -367,18 +397,60 @@
     }, 4 * 60 * 1000);
   })();
 
-  /* ------------------------- Theme sync (native) ------------------------ */
-  // Keep the native window chrome in step with the page's light/dark theme.
-  (function themeSync() {
-    if (!window.__TAURI_INTERNALS__ || !window.matchMedia) return;
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const push = () => {
-      // Core window command (works from the remote origin); applies to the
-      // calling webview's own window.
-      invoke("plugin:window|set_theme", { value: mq.matches ? "dark" : "light" })?.catch?.(() => {});
+  /* --------------------------- Force theme ------------------------------ */
+  // Force the Messenger page theme to the user's choice (Settings → Theme). The
+  // native window chrome is driven Rust-side from the same setting.
+  (function forceTheme() {
+    const html = document.documentElement;
+    const apply = () => {
+      const forced = window.__CARRIER_SETTINGS__?.theme;
+      if (forced !== "light" && forced !== "dark") return; // "system": leave FB alone
+      const want = forced === "dark" ? "__fb-dark-mode" : "__fb-light-mode";
+      const other = forced === "dark" ? "__fb-light-mode" : "__fb-dark-mode";
+      if (!html.classList.contains(want) || html.classList.contains(other)) {
+        html.classList.remove(other);
+        html.classList.add(want);
+      }
     };
-    push();
-    mq.addEventListener?.("change", push);
+    apply();
+    window.addEventListener("carrier:settings", apply);
+    // Re-assert if Facebook flips its own class back.
+    new MutationObserver(apply).observe(html, { attributes: true, attributeFilter: ["class"] });
+  })();
+
+  /* --------------------------- Unread badge ----------------------------- */
+  // Mirror Facebook's unread count (it puts "(N)" in the page title) onto the
+  // Dock / taskbar badge, and tell Rust so the tray tooltip can show it too.
+  (function unreadBadge() {
+    if (!window.__TAURI_INTERNALS__) return;
+    let last = null;
+    const update = () => {
+      const on = window.__CARRIER_SETTINGS__?.unread_badge !== false;
+      const m = on && (document.title || "").match(/\((\d+)\)/);
+      const n = m ? parseInt(m[1], 10) : 0;
+      if (n === last) return;
+      last = n;
+      invoke("plugin:window|set_badge_count", { count: n > 0 ? n : null })?.catch?.(() => {});
+      invoke("plugin:event|emit", { event: "carrier:unread", payload: n })?.catch?.(() => {});
+    };
+    const title = document.querySelector("title");
+    if (title) new MutationObserver(update).observe(title, { childList: true, subtree: true, characterData: true });
+    window.addEventListener("carrier:settings", update);
+    setInterval(update, 15000);
+    update();
+  })();
+
+  /* --------------------------- Compact mode ----------------------------- */
+  // Toggle a marker class the injected CSS keys off of to collapse side panels.
+  (function compact() {
+    const apply = () => {
+      document.documentElement.toggleAttribute(
+        "data-carrier-compact",
+        window.__CARRIER_SETTINGS__?.compact === true,
+      );
+    };
+    apply();
+    window.addEventListener("carrier:settings", apply);
   })();
 
   /* ------------------ Camera/mic permission warning --------------------- */
