@@ -293,6 +293,11 @@
   // messages notify you even when Carrier is in the background.
   (function notificationBridge() {
     if (!window.__TAURI_INTERNALS__) return;
+    // Make sure the OS has actually granted Carrier notification permission,
+    // otherwise plugin:notification|notify silently no-ops.
+    invoke("plugin:notification|is_permission_granted")
+      ?.then?.((granted) => granted || invoke("plugin:notification|request_permission"))
+      ?.catch?.(() => {});
     function CarrierNotification(title, options = {}) {
       try {
         notify({ title: String(title || "Messenger"), body: String(options.body || "") });
