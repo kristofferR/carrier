@@ -231,40 +231,21 @@ fn unwrap_tracking(url: &Url) -> Option<String> {
         .map(|(_, v)| v.into_owned())
 }
 
-/// OAuth/login URLs that must stay *inside* the app (so logging in with
-/// Google/Apple/Microsoft/GitHub works in a popup instead of the browser).
+/// OAuth/login URLs that must stay *inside* the app, so Facebook's "continue
+/// with Google/Apple/Microsoft" social logins work as an in-app popup instead of
+/// bouncing to the browser. Restricted to the dedicated auth hosts (which serve
+/// nothing but auth) — matching on OAuth *paths* across arbitrary hosts is both
+/// unnecessary (Facebook doesn't offer those providers) and error-prone.
 fn is_auth_url(url: &Url) -> bool {
     let host = url.host_str().unwrap_or("").to_ascii_lowercase();
-    // Dedicated OAuth provider hosts (these serve nothing but auth) stay in-app.
     const AUTH_HOSTS: &[&str] = &[
         "accounts.google.com",
         "login.microsoftonline.com",
         "appleid.apple.com",
     ];
-    if AUTH_HOSTS
+    AUTH_HOSTS
         .iter()
         .any(|h| host == *h || host.ends_with(&format!(".{h}")))
-    {
-        return true;
-    }
-    // Hosts where an OAuth path disambiguates a login flow from ordinary links.
-    // Scoped to these hosts so a shared `example.com/oauth` link is NOT kept
-    // in-app.
-    const OAUTH_HOSTS: &[&str] = &["github.com", "gitlab.com", "bitbucket.org"];
-    if OAUTH_HOSTS
-        .iter()
-        .any(|h| host == *h || host.ends_with(&format!(".{h}")))
-    {
-        let path = url.path().to_ascii_lowercase();
-        const PATHS: &[&str] = &[
-            "/login/oauth",
-            "/oauth/authorize",
-            "/o/oauth2",
-            "/auth/authorize",
-        ];
-        return PATHS.iter().any(|p| path.contains(p));
-    }
-    false
 }
 
 /// Domains kept *inside* the app (Messenger plus the Facebook/Meta auth and
@@ -309,47 +290,35 @@ fn is_internal(url: &Url) -> bool {
 // Downloads
 // ---------------------------------------------------------------------------
 
-/// Only fetch ordinary public web URLs. Blocks non-HTTP(S) schemes and
-/// loopback/private/link-local hosts so an injected page script can't use these
-/// commands to probe the local network (SSRF).
-fn is_public_http(url: &Url) -> bool {
-    if !matches!(url.scheme(), "http" | "https") {
+/// Only the commands that fetch a URL (copy/download image & video) are exposed
+/// to the remote page, so restrict them to Facebook/Messenger media hosts over
+/// HTTPS. This is a strict allowlist — far stronger than IP filtering, since an
+/// attacker can't point `fbcdn.net` at a private/loopback address via DNS
+/// rebinding to reach the local network (SSRF).
+fn is_fetchable_media_host(url: &Url) -> bool {
+    if url.scheme() != "https" {
         return false;
     }
-    match url.host() {
-        Some(url::Host::Domain(d)) => {
-            let d = d.to_ascii_lowercase();
-            d != "localhost" && !d.ends_with(".localhost")
-        }
-        Some(url::Host::Ipv4(ip)) => {
-            !(ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified())
-        }
-        Some(url::Host::Ipv6(ip)) => {
-            // IPv4-mapped addresses (::ffff:a.b.c.d) get the IPv4 rules.
-            if let Some(v4) = ip.to_ipv4_mapped() {
-                return !(v4.is_loopback()
-                    || v4.is_private()
-                    || v4.is_link_local()
-                    || v4.is_unspecified());
-            }
-            let seg = ip.segments();
-            let unique_local = (seg[0] & 0xfe00) == 0xfc00; // fc00::/7
-            let link_local = (seg[0] & 0xffc0) == 0xfe80; // fe80::/10
-            !(ip.is_loopback() || ip.is_unspecified() || unique_local || link_local)
-        }
-        None => false,
-    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    const HOSTS: &[&str] = &["fbcdn.net", "fbsbx.com", "facebook.com", "messenger.com"];
+    HOSTS
+        .iter()
+        .any(|s| host == *s || host.ends_with(&format!(".{s}")))
 }
 
-/// Fetch a public URL into memory (capped), with timeouts and no redirects.
+/// Fetch a Facebook/Messenger media URL into memory (capped), with timeouts and
+/// no redirects.
 fn fetch_public(url: &str, cap: u64) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let parsed = Url::parse(url).map_err(|e| e.to_string())?;
-    if !is_public_http(&parsed) {
-        return Err("refusing to fetch a non-public URL".into());
+    if !is_fetchable_media_host(&parsed) {
+        return Err("refusing to fetch a non-Messenger URL".into());
     }
-    // No redirects: a public URL must not be able to bounce us onto a private
-    // host (SSRF). Accept 2xx only.
+    // No redirects: the allowlisted host must not be able to bounce us elsewhere
+    // (SSRF). Accept 2xx only.
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(30))
         .timeout_read(Duration::from_secs(60))
@@ -475,12 +444,11 @@ fn set_settings(
     state: State<AppState>,
     new: Settings,
 ) -> Result<Settings, String> {
-    {
-        let mut guard = state.settings.lock().unwrap();
-        *guard = new.clone();
-    }
-    apply_settings(&app, &new);
+    // Persist first; only touch runtime state if the write succeeded, so a
+    // failed save can't leave the app applying settings it didn't store.
     save_settings(&app, &new)?;
+    *state.settings.lock().unwrap() = new.clone();
+    apply_settings(&app, &new);
     Ok(new)
 }
 
@@ -488,9 +456,9 @@ fn set_settings(
 #[tauri::command]
 fn reset_settings(app: tauri::AppHandle, state: State<AppState>) -> Result<Settings, String> {
     let def = Settings::default();
+    save_settings(&app, &def)?;
     *state.settings.lock().unwrap() = def.clone();
     apply_settings(&app, &def);
-    save_settings(&app, &def)?;
     Ok(def)
 }
 
@@ -533,19 +501,21 @@ fn copy_image(url: String) -> Result<(), String> {
 #[tauri::command]
 fn download_file(url: String) -> Result<String, String> {
     let parsed = Url::parse(&url).map_err(|e| e.to_string())?;
-    if !is_public_http(&parsed) {
-        return Err("refusing to fetch a non-public URL".into());
+    if !is_fetchable_media_host(&parsed) {
+        return Err("refusing to fetch a non-Messenger URL".into());
     }
     let dir = downloads_dir().ok_or("no downloads directory")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = unique_path(dir.join(filename_from_url(&parsed)));
 
-    // Connect timeout only (so large media isn't cut off mid-download) and no
-    // redirects (SSRF).
+    // Connect + read timeouts (the read timeout fires only when a stalled
+    // connection sends nothing, so it doesn't abort a slow-but-progressing
+    // download) and no redirects (SSRF).
     use std::io::Read;
     const CAP: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(30))
+        .timeout_read(Duration::from_secs(120))
         .redirects(0)
         .build();
     let resp = agent.get(&url).call().map_err(|e| e.to_string())?;
@@ -1078,23 +1048,22 @@ mod tests {
     }
 
     #[test]
-    fn public_http_allows_public_blocks_private_and_non_web() {
-        assert!(is_public_http(&u("https://scontent.fbcdn.net/v/x.jpg")));
-        assert!(is_public_http(&u("https://1.1.1.1/x")));
-        // loopback / private / link-local / IPv6 ULA / IPv4-mapped
-        assert!(!is_public_http(&u("http://localhost/x")));
-        assert!(!is_public_http(&u("https://foo.localhost/x")));
-        assert!(!is_public_http(&u("http://127.0.0.1/x")));
-        assert!(!is_public_http(&u("http://10.0.0.5/x")));
-        assert!(!is_public_http(&u("http://192.168.1.1/x")));
-        assert!(!is_public_http(&u("http://169.254.1.1/x")));
-        assert!(!is_public_http(&u("http://[::1]/x")));
-        assert!(!is_public_http(&u("http://[fd00::1]/x")));
-        assert!(!is_public_http(&u("http://[fe80::1]/x")));
-        assert!(!is_public_http(&u("http://[::ffff:127.0.0.1]/x")));
-        // non-web schemes
-        assert!(!is_public_http(&u("ftp://example.com/x")));
-        assert!(!is_public_http(&u("file:///etc/passwd")));
+    fn fetchable_media_host_is_an_https_fb_allowlist() {
+        assert!(is_fetchable_media_host(&u(
+            "https://scontent.fbcdn.net/v/x.jpg"
+        )));
+        assert!(is_fetchable_media_host(&u(
+            "https://video.xx.fbcdn.net/x.mp4"
+        )));
+        assert!(is_fetchable_media_host(&u("https://www.facebook.com/x")));
+        // wrong scheme, arbitrary hosts, and IPs are all rejected
+        assert!(!is_fetchable_media_host(&u(
+            "http://scontent.fbcdn.net/x.jpg"
+        ))); // not https
+        assert!(!is_fetchable_media_host(&u("https://example.com/x.jpg")));
+        assert!(!is_fetchable_media_host(&u("https://evil-fbcdn.net/x"))); // suffix trick
+        assert!(!is_fetchable_media_host(&u("https://127.0.0.1/x")));
+        assert!(!is_fetchable_media_host(&u("https://localhost/x")));
     }
 
     #[test]
@@ -1109,16 +1078,16 @@ mod tests {
     }
 
     #[test]
-    fn auth_scoped_to_known_hosts() {
+    fn auth_is_dedicated_hosts_only() {
         assert!(is_auth_url(&u("https://accounts.google.com/anything")));
         assert!(is_auth_url(&u("https://appleid.apple.com/auth/authorize")));
         assert!(is_auth_url(&u(
-            "https://github.com/login/oauth/authorize?x=1"
+            "https://login.microsoftonline.com/common/oauth2"
         )));
-        // ordinary links must NOT be treated as auth
+        // code hosts and arbitrary /oauth paths are external, not in-app auth
+        assert!(!is_auth_url(&u("https://github.com/login/oauth/authorize")));
         assert!(!is_auth_url(&u("https://github.com/user/repo")));
         assert!(!is_auth_url(&u("https://example.com/oauth/authorize")));
-        assert!(!is_auth_url(&u("https://example.com/login")));
     }
 
     #[test]
