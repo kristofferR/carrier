@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Carrier</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #18191a; color: #b0b3b8;
+        font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        display: grid; place-items: center; }
+      .box { text-align: center; opacity: .8; }
+    </style>
+  </head>
+  <body>
+    <!--
+      Carrier loads https://www.facebook.com/messages directly into the WebView,
+      so this bundled document is only a fallback (e.g. shown if the network is
+      down before the remote page loads).
+    -->
+    <div class="box">
+      <p>Connecting to Messenger…</p>
+    </div>
+  </body>
+</html>

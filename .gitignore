@@ -13,3 +13,10 @@ Thumbs.db
 /dist-bundle/
 *.dmg
 *.app.tar.gz
+
+# updater signing key (never commit)
+*.key
+*.key.pub
+
+docs/PARITY.md
+docs/FULL_INJECT.js

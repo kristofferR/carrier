@@ -1,13 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Carrier",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "io.github.kristofferr.carrier",
   "build": {
     "frontendDist": "../dist"
   },
   "app": {
-    "withGlobalTauri": false,
+    "withGlobalTauri": true,
     "windows": [],
     "security": {
       "csp": null
@@ -15,7 +15,14 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "app", "nsis", "deb", "appimage"],
+    "targets": [
+      "dmg",
+      "app",
+      "nsis",
+      "deb",
+      "rpm",
+      "appimage"
+    ],
     "publisher": "kristofferR",
     "category": "SocialNetworking",
     "shortDescription": "Distraction-free Messenger desktop client",
@@ -29,6 +36,27 @@
     ],
     "macOS": {
       "minimumSystemVersion": "10.15"
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libayatana-appindicator3-1"],
+        "section": "net"
+      },
+      "rpm": {
+        "depends": ["webkit2gtk4.1", "gtk3", "libayatana-appindicator-gtk3"]
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/kristofferR/carrier/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYyNUU2MkMzRUU2MTdGMkQKUldRdGYySHV3MkplWXFtdnR2aUV6YVQ2V3NQRWwwNC9kcE43MmZSSnQwMFgwcEM4SHgrS3NPeGkK"
     }
   }
 }

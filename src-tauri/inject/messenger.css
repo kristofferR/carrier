@@ -52,3 +52,42 @@ div[role="dialog"][aria-label] {
 .__fb-dark-mode {
   --hosted-view-selected-state: #3a3a3a !important;
 }
+
+/* --- Login page: hide the marketing collage, show just the login box --- */
+/* (`data-carrier-*` attributes are set by the login tidy-up in messenger.js.) */
+[data-carrier-hide] {
+  display: none !important;
+}
+
+html[data-carrier-login] [data-carrier-login-col] {
+  margin-left: auto !important;
+  margin-right: auto !important;
+  float: none !important;
+  max-width: 420px !important;
+}
+
+/* Centre the remaining login column within whatever container is left. */
+html[data-carrier-login] body {
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: center !important;
+}
+
+/* Dark mode on the login page is handled by swapping Facebook's own theme
+   class (__fb-light-mode -> __fb-dark-mode) in messenger.js, which uses FB's
+   native dark palette rather than a fragile colour-invert filter. When that
+   swap happens (marked with data-carrier-darkswap), darken the page backdrop so
+   the centred login card isn't surrounded by white. The `#facebook` id selector
+   matches Facebook's own high-specificity background rule on <html>. */
+html#facebook[data-carrier-darkswap],
+html[data-carrier-darkswap],
+html[data-carrier-darkswap] body {
+  background-color: #18191a !important;
+}
+
+/* The login card's ancestor wrappers often carry a white background; clear it
+   so the dark page shows through around the centred card. */
+html[data-carrier-darkswap] [data-carrier-login-anc] {
+  background-color: transparent !important;
+  background-image: none !important;
+}

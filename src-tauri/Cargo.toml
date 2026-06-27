@@ -1,6 +1,6 @@
 [package]
 name = "carrier"
-version = "0.1.0"
+version = "0.2.0"
 description = "A tiny, distraction-free desktop client for Facebook Messenger"
 authors = ["kristofferR"]
 edition = "2021"
@@ -15,10 +15,30 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-updater = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-log = "2"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
 open = "5"
+arboard = "3"
+ureq = "2"
+base64 = "0.22"
+dark-light = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+
+# Optional: an MCP socket server used only for autonomous UI testing.
+# Enable with `--features mcp` (e.g. `cargo run --features mcp`); never shipped
+# in release builds, so its `devtools` feature doesn't bloat them.
+tauri-plugin-mcp = { git = "https://github.com/P3GLEG/tauri-plugin-mcp", features = ["devtools"], optional = true }
+
+[features]
+mcp = ["dep:tauri-plugin-mcp"]
 
 [profile.release]
 panic = "abort"

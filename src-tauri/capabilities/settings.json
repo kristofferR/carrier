@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "The local settings window. It calls Carrier's own commands (get/set settings, check for updates) and reads the app version.",
+  "windows": ["settings"],
+  "permissions": ["core:default"]
+}

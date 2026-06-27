@@ -1,7 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capabilities for the main Carrier window. The page never calls into the Rust core, so only the defaults are granted.",
-  "windows": ["main"],
-  "permissions": ["core:default"]
+  "description": "Capabilities for Carrier windows. The injected scripts call Carrier's own commands (settings, open-external, copy/download image, notifications, theme, update check); Tauri v2 blocks IPC from remote origins unless they are listed under `remote`.",
+  "windows": ["main", "win-*"],
+  "remote": {
+    "urls": ["https://www.facebook.com", "https://*.facebook.com"]
+  },
+  "permissions": [
+    "core:default",
+    "notification:default",
+    "window-state:default"
+  ]
 }

@@ -20,15 +20,30 @@ few MB and uses a fraction of the RAM of an Electron app.
 - **Distraction-free** — a stylesheet hides Facebook's banner, global search,
   Feed/Marketplace/Reels navigation, and tidies the active-chat highlight.
 - **Lightweight & native** — one WebView window, no bundled Chromium.
+- **Native notifications** — new messages raise real OS notifications even when
+  Carrier is in the background.
 - **Stays out of the way** — closing hides to the system tray; the app keeps
-  running in the background so you still get messages.
-- **Links open in your browser** — anything that isn't Messenger (a shared
-  article, a profile link) opens in your real default browser, not in the app.
-- **Keyboard shortcuts** (with <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>):
-  `[` / `]` back & forward, `-` / `=` / `0` zoom out/in/reset, `r` reload.
-- **Image & video viewer** — double-click a photo or video in a chat to open a
-  zoom/pan overlay (wheel to zoom, drag or arrow keys to pan, `Esc` to close).
-- **Calls work** — camera/microphone are requested for Messenger voice & video.
+  running so you still get messages.
+- **Settings panel** (<kbd>F3</kbd>) — Always on Top, system tray, Start to Tray,
+  Start on System Startup, Hide on Close, spell-check, experimental multi-window.
+- **Links open in your browser** — anything that isn't Messenger opens in your
+  real default browser (Facebook's `l.php` tracking redirects are stripped
+  first). Google/Apple/Microsoft/GitHub logins still work in-app.
+- **Auto-updates** — verified updates via the Tauri updater (<kbd>F2</kbd> to
+  check now).
+- **Full native menu** — back/forward/home, reload, zoom, print, new window,
+  clear cache, copy current URL, plus standard edit/window menus.
+- **Keyboard shortcuts** — <kbd>F2</kbd> updates, <kbd>F3</kbd> settings,
+  <kbd>F5</kbd>/<kbd>Cmd-R</kbd> reload, <kbd>Cmd</kbd>+`[`/`]` back/forward,
+  <kbd>Cmd</kbd>+`-`/`=`/`0` zoom.
+- **Right-click menus** — copy/download/open images & videos, copy/open links.
+  Copying works even for images the page only renders as blobs.
+- **Image & video viewer** — double-click a photo or video to open a zoom/pan
+  overlay (wheel to zoom, drag or arrow keys to pan, `Esc` to close).
+- **Theme-aware** — the native window follows the page's light/dark theme.
+- **Calls work** — camera/microphone are requested for Messenger voice & video;
+  if the OS has them blocked, Carrier offers to open privacy settings.
+- **Remembers its window** — size and position persist between launches.
 
 ## Install
 
