@@ -1,9 +1,54 @@
-<div align="center">
-  <img src="app-icon.png" width="120" alt="Carrier icon" />
-  <h1>Carrier</h1>
-  <p><strong>A tiny, distraction-free desktop client for Facebook Messenger.</strong></p>
-  <p>No Feed, no Reels, no Marketplace — just your conversations, in a native window.</p>
-</div>
+<p align="center">
+  <img src="app-icon.png" width="128" height="128" alt="Carrier icon">
+</p>
+
+<h1 align="center">Carrier</h1>
+
+<p align="center">
+  A tiny, distraction-free desktop client for Facebook Messenger.<br>
+  Built with Tauri v2 — runs on macOS, Windows, and Linux.
+</p>
+
+<!-- Add docs/screenshot.png (a view you're happy to share publicly) and uncomment:
+<p align="center">
+  <img src="docs/screenshot.png" alt="Carrier screenshot" width="720">
+</p>
+-->
+
+<h3 align="center">Download</h3>
+
+<table align="center">
+  <tr>
+    <td align="center" width="220">
+      <a href="https://github.com/kristofferR/carrier/releases/download/v1.0.0/Carrier_1.0.0_mac_arm.dmg">
+        <img src="docs/icons/download.svg" width="56" height="56" alt=""><br>
+        <strong>Download for macOS</strong><br>
+        <sub>Apple Silicon &middot; .dmg</sub>
+      </a>
+    </td>
+    <td align="center" width="220">
+      <a href="https://github.com/kristofferR/carrier/releases/download/v1.0.0/Carrier_1.0.0_win_x64_setup.exe">
+        <img src="docs/icons/download.svg" width="56" height="56" alt=""><br>
+        <strong>Download for Windows</strong><br>
+        <sub>64-bit installer &middot; .exe</sub>
+      </a>
+    </td>
+    <td align="center" width="220">
+      <a href="https://github.com/kristofferR/carrier/releases/download/v1.0.0/Carrier_1.0.0_lin_x64.AppImage">
+        <img src="docs/icons/download.svg" width="56" height="56" alt=""><br>
+        <strong>Download for Linux</strong><br>
+        <sub>AppImage &middot; x64</sub>
+      </a>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <sub>
+    Intel Mac, Windows ARM, Linux ARM, <code>.deb</code>/<code>.rpm</code>?
+    <a href="https://github.com/kristofferR/carrier/releases/latest">See all files →</a>
+  </sub>
+</p>
 
 ---
 
@@ -13,51 +58,56 @@ the Messenger web app (`facebook.com/messages`) in a small native window and
 strips away the surrounding Facebook chrome.
 
 Built with [Tauri](https://tauri.app) (Rust + the OS's native WebView), so it's a
-few MB and uses a fraction of the RAM of an Electron app.
+few MB and uses a fraction of the RAM of an Electron app. The macOS build is
+Developer-ID signed and notarized.
 
 ## Features
 
-- **Distraction-free** — a stylesheet hides Facebook's banner, global search,
-  Feed/Marketplace/Reels navigation, and tidies the active-chat highlight.
+- **Distraction-free** — a stylesheet hides Facebook's banner, global search, and
+  Feed/Marketplace/Reels navigation, leaving just your conversations.
 - **Lightweight & native** — one WebView window, no bundled Chromium.
 - **Native notifications** — new messages raise real OS notifications even when
   Carrier is in the background.
-- **Stays out of the way** — closing hides to the system tray; the app keeps
-  running so you still get messages.
-- **Settings panel** (<kbd>F3</kbd>) — Always on Top, system tray, Start to Tray,
-  Start on System Startup, Hide on Close, spell-check, experimental multi-window.
+- **Unread badge** — the unread count appears on the Dock / taskbar icon.
+- **Force light / dark theme** — keep Messenger (and the window chrome, including
+  the macOS title bar) light or dark regardless of the system theme, or follow
+  the system.
+- **Jump to a conversation** — <kbd>Cmd/Ctrl</kbd>+<kbd>1</kbd>–<kbd>9</kbd> jumps
+  to the Nth chat in the list.
+- **Compact mode** — collapse the conversation-info panel for a roomier chat view
+  (<kbd>Cmd/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>).
+- **Menu-bar mode** (macOS) — optionally hide the Dock icon and live in the menu
+  bar; click the tray icon to toggle the window.
+- **Stays out of the way** — closing hides to the tray, so you keep getting
+  messages; a tray click brings it back (and hides it again).
 - **Links open in your browser** — anything that isn't Messenger opens in your
   real default browser (Facebook's `l.php` tracking redirects are stripped
-  first). Google/Apple/Microsoft/GitHub logins still work in-app.
-- **Auto-updates** — verified updates via the Tauri updater (<kbd>F2</kbd> to
-  check now).
-- **Full native menu** — back/forward/home, reload, zoom, print, new window,
-  clear cache, copy current URL, plus standard edit/window menus.
-- **Keyboard shortcuts** — <kbd>F2</kbd> updates, <kbd>F3</kbd> settings,
-  <kbd>F5</kbd>/<kbd>Cmd-R</kbd> reload, <kbd>Cmd</kbd>+`[`/`]` back/forward,
-  <kbd>Cmd</kbd>+`-`/`=`/`0` zoom.
+  first). Google/Apple/Microsoft logins still work in-app.
+- **Auto-updates** — verified, signed updates via the Tauri updater
+  (<kbd>F2</kbd>, or **Settings → Check for updates**).
 - **Right-click menus** — copy/download/open images & videos, copy/open links.
   Copying works even for images the page only renders as blobs.
-- **Image & video viewer** — double-click a photo or video to open a zoom/pan
-  overlay (wheel to zoom, drag or arrow keys to pan, `Esc` to close).
-- **Theme-aware** — the native window follows the page's light/dark theme.
-- **Calls work** — camera/microphone are requested for Messenger voice & video;
-  if the OS has them blocked, Carrier offers to open privacy settings.
+- **Image & video viewer** — double-click a photo or video for a zoom/pan overlay
+  (wheel to zoom, drag or arrow keys to pan, <kbd>Esc</kbd> to close).
+- **Calls work** — camera/microphone are requested for Messenger voice & video.
 - **Remembers its window** — size and position persist between launches.
+- **Settings window** (<kbd>F3</kbd>) — theme, unread badge, compact, menu-bar
+  mode, always-on-top, tray, start-to-tray, start on login, hide-on-close,
+  spell-check, and experimental multi-window.
+
+## Keyboard shortcuts
+
+- <kbd>Cmd/Ctrl</kbd>+<kbd>1</kbd>–<kbd>9</kbd> — jump to the Nth conversation
+- <kbd>Cmd/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> — toggle compact mode
+- <kbd>F2</kbd> check for updates &middot; <kbd>F3</kbd> settings &middot;
+  <kbd>F5</kbd>/<kbd>Cmd-R</kbd> reload
+- <kbd>Cmd</kbd>+<kbd>-</kbd>/<kbd>=</kbd>/<kbd>0</kbd> — zoom out / in / reset
 
 ## Install
 
-Grab the latest installer for your platform from the
-[Releases](https://github.com/kristofferR/carrier/releases) page:
-
-| Platform | File |
-|----------|------|
-| macOS    | `Carrier_*.dmg` |
-| Windows  | `Carrier_*-setup.exe` |
-| Linux    | `Carrier_*.AppImage` / `*.deb` |
-
-> macOS: the app is ad-hoc signed. On first launch, right-click → **Open** (or
-> run `xattr -dr com.apple.quarantine /Applications/Carrier.app`).
+Grab the installer for your platform from the **Download** box above or the
+[Releases](https://github.com/kristofferR/carrier/releases) page. The macOS build
+is signed and notarized, so it opens normally — no right-click-Open needed.
 
 ## Build from source
 
@@ -74,47 +124,35 @@ bun run build    # produce installers in src-tauri/target/release/bundle/
 
 ## How it works
 
-Carrier is deliberately simple. The Rust shell (`src-tauri/src/lib.rs`):
+The Rust shell (`src-tauri/src/lib.rs`) opens one WebView window at
+`https://www.facebook.com/messages` with a modern browser user-agent, then injects
+at document start:
 
-1. Opens one WebView window at `https://www.facebook.com/messages` with a modern
-   browser user-agent (so Facebook serves the full web app).
-2. Injects, at document start:
-   - [`inject/messenger.css`](src-tauri/inject/messenger.css) — hides the
-     Facebook chrome (carefully keeping the media-viewer controls).
-   - [`inject/messenger.js`](src-tauri/inject/messenger.js) — keyboard
-     shortcuts, page zoom, the image/video viewer, and a fullscreen polyfill.
-3. Routes off-site navigation to the default browser, and hides to the tray on
-   close.
+- [`inject/messenger.css`](src-tauri/inject/messenger.css) — hides the Facebook
+  chrome (carefully keeping the media-viewer controls).
+- [`inject/messenger.js`](src-tauri/inject/messenger.js) — keyboard shortcuts,
+  page zoom, the image/video viewer, notifications, the unread badge, theme
+  forcing, and the adaptive context menu.
 
-That's the whole app. To wrap a *different* site, change `HOME_URL`, the
-internal-domain list, and the injected CSS.
+Because Facebook is a remote origin, page features reach the backend through Tauri
+plugins (opener, notification) and core events rather than custom commands. Off-site
+navigation is routed to the default browser, and the window hides to the tray on
+close.
 
 ## Auto-updates
 
 Carrier ships with the Tauri updater wired up: it checks
 `releases/latest/download/latest.json` and can download & install a verified
 (minisign-signed) update — press <kbd>F2</kbd> or use **Settings → Check for
-updates**.
-
-Updater artifacts are produced **only by the release CI** (which has the signing
-key), via `src-tauri/tauri.conf.release.json`. A plain local `bun run tauri
-build` does **not** require the key. To cut a signed release you need the
-`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repo secrets
-set (generate with `bun run tauri signer generate`).
-
-## Acknowledgements & prior art
-
-Carrier is a clean-room project inspired by the same idea as
-[Pake](https://github.com/tw93/Pake) (MIT) — "turn any webpage into a desktop
-app with Rust." It exists as an open alternative to the closed-source
-`messenger-next` app.
+updates**. Release builds are produced by CI, which holds the signing and Apple
+notarization secrets.
 
 ## Disclaimer
 
-Carrier is an unofficial, independent project. It is not affiliated with,
-endorsed by, or sponsored by Meta Platforms, Inc. "Facebook" and "Messenger" are
-trademarks of their respective owners. Carrier does not modify Facebook's servers
-or data; it only restyles the page locally in your own window.
+Carrier is an unofficial, independent project. It is not affiliated with, endorsed
+by, or sponsored by Meta Platforms, Inc. "Facebook" and "Messenger" are trademarks
+of their respective owners. Carrier does not modify Facebook's servers or data; it
+only restyles the page locally in your own window.
 
 ## License
 

@@ -1,7 +1,9 @@
 name: Release
 
-# Build installers for macOS, Windows and Linux (per-arch) and attach them to a
-# GitHub Release. Triggered by pushing a tag like `v0.2.0`, or manually.
+# Build installers for macOS, Windows and Linux (per-arch), sign + notarize the
+# macOS artifacts, and attach everything to a GitHub Release. Triggered by
+# pushing a tag like `v1.0.0`, or manually. The release is created as a draft and
+# only published once every build has uploaded (the `publish` job).
 on:
   push:
     tags:
@@ -38,6 +40,12 @@ jobs:
             target: aarch64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
+    # Stable, predictable asset names (e.g. Carrier_1.0.0_mac_arm.dmg) that the
+    # README download links point at.
+    env:
+      ASSET_PLATFORM: ${{ contains(matrix.target, 'apple-darwin') && 'mac' || contains(matrix.target, 'windows') && 'win' || 'lin' }}
+      ASSET_ARCH: ${{ startsWith(matrix.target, 'aarch64') && 'arm' || 'x64' }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -79,7 +87,7 @@ jobs:
           # Updater signing (required for auto-update artifacts).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS code signing + notarization (optional — only used if configured).
+          # macOS code signing + notarization of the .app (only used if set).
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -92,7 +100,42 @@ jobs:
           releaseBody: "Download the installer for your platform below."
           releaseDraft: true
           prerelease: false
+          # Keep these aliases stable: the README links build asset URLs from them.
+          assetNamePattern: "Carrier_[version]_${{ env.ASSET_PLATFORM }}_${{ env.ASSET_ARCH }}[_setup][ext]"
           # The release config enables createUpdaterArtifacts (kept out of the
-          # base config so local `tauri build` doesn't require the signing key).
-          # Path is relative to the repo root (tauri-action's projectPath).
+          # base config so a local `tauri build` doesn't require the signing key).
           args: --target ${{ matrix.target }} --config src-tauri/tauri.conf.release.json
+
+      # tauri-action notarizes the .app but not the .dmg, so a downloaded .dmg
+      # would still prompt. Notarize + staple it and re-upload under the same
+      # stable name.
+      - name: Notarize + staple the .dmg
+        if: startsWith(matrix.os, 'macos')
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_ID}" ]; then
+            echo "No Apple credentials configured — skipping .dmg notarization."
+            exit 0
+          fi
+          SRC=$(find "src-tauri/target/${{ matrix.target }}/release/bundle/dmg" -name '*.dmg' | head -1)
+          if [ -z "${SRC}" ]; then echo "No .dmg found."; exit 0; fi
+          xcrun notarytool submit "${SRC}" --apple-id "${APPLE_ID}" --password "${APPLE_PASSWORD}" --team-id "${APPLE_TEAM_ID}" --wait
+          xcrun stapler staple "${SRC}"
+          DEST="Carrier_${GITHUB_REF_NAME#v}_${ASSET_PLATFORM}_${ASSET_ARCH}.dmg"
+          cp "${SRC}" "${DEST}"
+          gh release upload "${{ github.ref_name }}" "${DEST}" --clobber
+
+  # Flip the draft to public only after every build has uploaded its assets.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --draft=false --repo "${{ github.repository }}"

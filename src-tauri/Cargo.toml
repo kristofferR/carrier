@@ -1,6 +1,6 @@
 [package]
 name = "carrier"
-version = "0.2.0"
+version = "1.0.0"
 description = "A tiny, distraction-free desktop client for Facebook Messenger"
 authors = ["kristofferR"]
 edition = "2021"
