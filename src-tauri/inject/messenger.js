@@ -175,22 +175,24 @@
   // be called from the remote Facebook origin, only plugins / WebView hooks.)
   const MAX_BLOB = 512 * 1024 * 1024;
   async function downloadSrc(src, fallbackName) {
-    let href = src;
-    // Re-wrap remote media as a same-origin blob so the `download` attribute is
-    // honoured (it's ignored for cross-origin URLs) and the save keeps its name.
-    if (!src.startsWith("blob:") && !src.startsWith("data:")) {
-      const blob = await (await fetch(src)).blob();
-      if (blob.size > MAX_BLOB) throw new Error("file too large");
-      href = URL.createObjectURL(blob);
+    // Fetch into a same-origin blob so the `download` attribute is honoured (it's
+    // ignored for cross-origin URLs) and so we can derive the real extension.
+    const blob = await (await fetch(src)).blob();
+    if (blob.size > MAX_BLOB) throw new Error("file too large");
+    const href = URL.createObjectURL(blob);
+    let name = filenameFromUrl(src) || fallbackName;
+    if (!name.includes(".")) {
+      const ext = ((blob.type || "").split("/")[1] || "").split(";")[0];
+      if (ext) name += "." + ext;
     }
     const a = document.createElement("a");
     a.href = href;
-    a.download = filenameFromUrl(src) || fallbackName;
+    a.download = name;
     a.style.display = "none";
     document.body.appendChild(a);
     a.click();
     a.remove();
-    if (href !== src) setTimeout(() => URL.revokeObjectURL(href), 10000);
+    setTimeout(() => URL.revokeObjectURL(href), 10000);
   }
 
   async function copyImageSrc(src) {

@@ -8,9 +8,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, MenuItemBuilder, SubmenuBuilder},
@@ -25,7 +23,7 @@ use url::Url;
 /// The page we wrap.
 const HOME_URL: &str = "https://www.facebook.com/messages";
 
-/// Injected assets (clean-room; see `inject/`).
+/// Injected assets (independently written; see `inject/`).
 const INJECT_CSS: &str = include_str!("../inject/messenger.css");
 const INJECT_JS: &str = include_str!("../inject/messenger.js");
 const INJECT_PANEL: &str = include_str!("../inject/panel.js");
@@ -336,39 +334,6 @@ fn is_fetchable_media_host(url: &Url) -> bool {
         .any(|s| host == *s || host.ends_with(&format!(".{s}")))
 }
 
-/// Fetch a Facebook/Messenger media URL into memory (capped), with timeouts and
-/// no redirects.
-fn fetch_public(url: &str, cap: u64) -> Result<Vec<u8>, String> {
-    use std::io::Read;
-    let parsed = Url::parse(url).map_err(|e| e.to_string())?;
-    if !is_fetchable_media_host(&parsed) {
-        return Err("refusing to fetch a non-Messenger URL".into());
-    }
-    // No redirects: the allowlisted host must not be able to bounce us elsewhere
-    // (SSRF). Accept 2xx only.
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(30))
-        .timeout_read(Duration::from_secs(60))
-        .redirects(0)
-        .build();
-    let resp = agent
-        .get(url)
-        .call()
-        .map_err(|e| format!("fetch failed: {e}"))?;
-    if resp.status() >= 300 {
-        return Err("refusing to follow a redirect".into());
-    }
-    let mut bytes = Vec::new();
-    resp.into_reader()
-        .take(cap)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 >= cap {
-        return Err("response too large".into());
-    }
-    Ok(bytes)
-}
-
 fn downloads_dir() -> Option<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
     let base = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from);
@@ -396,8 +361,8 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Reduce a filename to a single safe path component so it can't escape the
-/// Downloads folder (path separators, NUL, and Windows drive/reserved chars).
+/// Strip path separators and shell-unsafe characters so a page-supplied name
+/// can't escape the Downloads folder; falls back to "download".
 fn sanitize_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -429,6 +394,48 @@ fn filename_from_url(url: &Url) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or("download");
     sanitize_filename(&percent_decode(raw))
+}
+
+/// True for filenames whose extension is a directly-executable type, so a remote
+/// page can't quietly drop malware in Downloads. Media, documents and archives
+/// (the things you'd actually save from Messenger) are all allowed.
+fn is_unsafe_download(name: &str) -> bool {
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    matches!(
+        ext.as_str(),
+        "exe"
+            | "msi"
+            | "bat"
+            | "cmd"
+            | "com"
+            | "scr"
+            | "ps1"
+            | "vbs"
+            | "vbe"
+            | "js"
+            | "jse"
+            | "wsf"
+            | "wsh"
+            | "hta"
+            | "dmg"
+            | "pkg"
+            | "app"
+            | "command"
+            | "scpt"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "run"
+            | "bin"
+            | "jar"
+            | "jnlp"
+            | "deb"
+            | "rpm"
+            | "appimage"
+    )
 }
 
 /// Avoid clobbering an existing file by appending " (n)".
@@ -513,181 +520,6 @@ fn reset_settings(app: tauri::AppHandle, state: State<AppState>) -> Result<Setti
     store_settings(&app, &state, Settings::default())
 }
 
-/// Open a URL in the user's default browser, unwrapping FB tracking redirects.
-#[tauri::command]
-fn open_external(url: String) -> Result<(), String> {
-    let parsed = Url::parse(&url).map_err(|e| e.to_string())?;
-    let target = unwrap_tracking(&parsed).unwrap_or(url);
-    // Only hand safe web schemes to the OS opener so a page script can't ask us
-    // to open arbitrary `file://`/custom-scheme URIs.
-    let scheme = Url::parse(&target)
-        .map(|u| u.scheme().to_string())
-        .unwrap_or_default();
-    if !matches!(scheme.as_str(), "http" | "https" | "mailto" | "tel") {
-        return Err(format!("refusing to open non-web URL ({scheme})"));
-    }
-    open::that(target).map_err(|e| e.to_string())
-}
-
-/// Download an image and place it on the system clipboard.
-#[tauri::command]
-fn copy_image(url: String) -> Result<(), String> {
-    let bytes = fetch_public(&url, 40 * 1024 * 1024)?;
-    // Cap dimensions/allocation during decode so a small but highly compressed
-    // image (a decompression bomb) can't blow up memory in `to_rgba8()`.
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(&bytes))
-        .with_guessed_format()
-        .map_err(|e| e.to_string())?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(16384);
-    limits.max_image_height = Some(16384);
-    limits.max_alloc = Some(256 * 1024 * 1024);
-    reader.limits(limits);
-    let img = reader
-        .decode()
-        .map_err(|e| format!("decode failed: {e}"))?
-        .to_rgba8();
-    let (w, h) = img.dimensions();
-
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard
-        .set_image(arboard::ImageData {
-            width: w as usize,
-            height: h as usize,
-            bytes: std::borrow::Cow::Owned(img.into_raw()),
-        })
-        .map_err(|e| e.to_string())
-}
-
-/// Download a URL to the Downloads folder; returns the saved path. Async +
-/// `spawn_blocking` so the blocking fetch/copy of a large file doesn't run on the
-/// main thread (which would freeze the UI).
-#[tauri::command]
-async fn download_file(url: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || download_file_blocking(url))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-fn download_file_blocking(url: String) -> Result<String, String> {
-    let parsed = Url::parse(&url).map_err(|e| e.to_string())?;
-    if !is_fetchable_media_host(&parsed) {
-        return Err("refusing to fetch a non-Messenger URL".into());
-    }
-    let dir = downloads_dir().ok_or("no downloads directory")?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = unique_path(dir.join(filename_from_url(&parsed)));
-
-    // Connect + read timeouts (the read timeout fires only when a stalled
-    // connection sends nothing, so it doesn't abort a slow-but-progressing
-    // download) and no redirects (SSRF).
-    use std::io::Read;
-    const CAP: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(30))
-        .timeout_read(Duration::from_secs(120))
-        .redirects(0)
-        .build();
-    let resp = agent.get(&url).call().map_err(|e| e.to_string())?;
-    if resp.status() >= 300 {
-        return Err("refusing to follow a redirect".into());
-    }
-    let mut reader = resp.into_reader().take(CAP);
-    let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
-    // Don't leave a partial (errored) or oversized file behind.
-    match std::io::copy(&mut reader, &mut file) {
-        Ok(n) if n < CAP => {}
-        other => {
-            drop(file);
-            let _ = std::fs::remove_file(&path);
-            return Err(match other {
-                Ok(_) => "file too large".to_string(),
-                Err(e) => e.to_string(),
-            });
-        }
-    }
-    Ok(path.to_string_lossy().into_owned())
-}
-
-/// Save base64-encoded bytes (e.g. a `blob:`/`data:` image the page rendered
-/// but that isn't a plain downloadable URL) to the Downloads folder. Async +
-/// `spawn_blocking` to keep the base64 decode + write off the main thread.
-#[tauri::command]
-async fn download_file_by_binary(filename: String, data: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || download_by_binary_blocking(filename, data))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-fn download_by_binary_blocking(filename: String, data: String) -> Result<String, String> {
-    // Cap the decoded size (~3/4 of the base64 length) before allocating.
-    const MAX_BYTES: usize = 512 * 1024 * 1024;
-    if data.len() / 4 * 3 > MAX_BYTES {
-        return Err("file too large".into());
-    }
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data.as_bytes())
-        .map_err(|e| e.to_string())?;
-    let dir = downloads_dir().ok_or("no downloads directory")?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = unique_path(dir.join(sanitize_filename(&filename)));
-    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().into_owned())
-}
-
-/// Show a native OS notification (used by the injected Web Notification shim).
-#[tauri::command]
-fn send_notification(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
-    app.notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show()
-        .map_err(|e| e.to_string())
-}
-
-/// Sync the native window theme with the page's `prefers-color-scheme`.
-#[tauri::command]
-fn update_theme_mode(app: tauri::AppHandle, mode: String) -> Result<(), String> {
-    let theme = match mode.as_str() {
-        "dark" => Some(tauri::Theme::Dark),
-        "light" => Some(tauri::Theme::Light),
-        _ => None, // follow the system
-    };
-    for w in app.webview_windows().values() {
-        let _ = w.set_theme(theme);
-    }
-    Ok(())
-}
-
-/// Open the OS privacy settings for camera/microphone (when a call is blocked).
-#[tauri::command]
-fn open_privacy_settings(kind: Option<String>) -> Result<(), String> {
-    let mic = kind.as_deref() == Some("microphone");
-    let _ = mic;
-    #[cfg(target_os = "macos")]
-    let url = if mic {
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-    } else {
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
-    };
-    #[cfg(target_os = "windows")]
-    let url = if mic {
-        "ms-settings:privacy-microphone"
-    } else {
-        "ms-settings:privacy-webcam"
-    };
-    #[cfg(target_os = "linux")]
-    return Ok(());
-    #[cfg(not(target_os = "linux"))]
-    open::that(url).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn restart_app(app: tauri::AppHandle) {
-    app.restart();
-}
-
 /// Clear the WebView's cookies/cache/storage, then relaunch.
 fn clear_cache(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -696,12 +528,6 @@ fn clear_cache(app: &tauri::AppHandle) {
     if let Ok(cache) = app.path().app_cache_dir() {
         let _ = std::fs::remove_dir_all(&cache);
     }
-}
-
-#[tauri::command]
-fn clear_cache_and_restart(app: tauri::AppHandle) {
-    clear_cache(&app);
-    app.restart();
 }
 
 /// Check GitHub releases for an update; download & install if found.
@@ -784,9 +610,23 @@ fn build_app_window(
             if !allowed {
                 return false;
             }
+            // Prefer the WebView's suggested filename — it carries the real
+            // extension (e.g. a blob the page named via `download="photo.png"`);
+            // fall back to the URL's last path segment.
+            let suggested = destination
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|n| !n.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| filename_from_url(&url));
+            let name = sanitize_filename(&suggested);
+            // Don't silently save an executable a page might push to Downloads.
+            if is_unsafe_download(&name) {
+                return false;
+            }
             if let Some(dir) = downloads_dir() {
                 let _ = std::fs::create_dir_all(&dir);
-                *destination = unique_path(dir.join(filename_from_url(&url)));
+                *destination = unique_path(dir.join(name));
             }
         }
         true
@@ -822,15 +662,6 @@ fn show_settings_window(app: &tauri::AppHandle) {
         .minimizable(false)
         .always_on_top(aot)
         .build();
-}
-
-#[tauri::command]
-fn open_settings_window(app: tauri::AppHandle) {
-    // Build the window off the synchronous command handler —
-    // `WebviewWindowBuilder::new` can deadlock on Windows otherwise.
-    tauri::async_runtime::spawn(async move {
-        show_settings_window(&app);
-    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1106,16 +937,6 @@ pub fn run() {
             get_settings,
             set_settings,
             reset_settings,
-            open_external,
-            open_settings_window,
-            copy_image,
-            download_file,
-            download_file_by_binary,
-            send_notification,
-            update_theme_mode,
-            open_privacy_settings,
-            restart_app,
-            clear_cache_and_restart,
             check_for_updates
         ])
         .setup(move |app| {

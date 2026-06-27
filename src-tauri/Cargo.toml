@@ -4,9 +4,9 @@ version = "0.2.0"
 description = "A tiny, distraction-free desktop client for Facebook Messenger"
 authors = ["kristofferR"]
 edition = "2021"
-# Driven by the `image` crate (0.25.10+ requires 1.88); keep in step with the
-# highest dependency MSRV so the advertised version is actually buildable.
-rust-version = "1.88"
+# Keep in step with the highest dependency MSRV (Tauri 2 + plugins) so the
+# advertised minimum is actually buildable.
+rust-version = "1.82"
 
 [lib]
 # The Tauri app logic lives in a lib so it can be shared with mobile targets.
@@ -29,11 +29,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
 open = "5"
-arboard = "3"
-ureq = "2"
-base64 = "0.22"
 dark-light = "1"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 
 [profile.release]
 panic = "abort"
