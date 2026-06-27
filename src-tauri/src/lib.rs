@@ -180,9 +180,17 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<TrayIcon> {
 
 /// Apply settings that have an immediate runtime effect.
 fn apply_settings(app: &tauri::AppHandle, s: &Settings) {
+    let settings_json = serde_json::to_string(s).ok();
     for (label, window) in app.webview_windows() {
         if label != "settings" {
             let _ = window.set_always_on_top(s.always_on_top);
+            // Push the new prefs to the running page so JS-side settings
+            // (spell-check) refresh without a reload.
+            if let Some(ref json) = settings_json {
+                let _ = window.eval(format!(
+                    "window.__CARRIER_SETTINGS__ = {json}; window.dispatchEvent(new Event('carrier:settings'));"
+                ));
+            }
         }
     }
 
@@ -472,7 +480,7 @@ fn open_external(url: String) -> Result<(), String> {
     let scheme = Url::parse(&target)
         .map(|u| u.scheme().to_string())
         .unwrap_or_default();
-    if !matches!(scheme.as_str(), "http" | "https" | "mailto") {
+    if !matches!(scheme.as_str(), "http" | "https" | "mailto" | "tel") {
         return Err(format!("refusing to open non-web URL ({scheme})"));
     }
     open::that(target).map_err(|e| e.to_string())
@@ -482,7 +490,18 @@ fn open_external(url: String) -> Result<(), String> {
 #[tauri::command]
 fn copy_image(url: String) -> Result<(), String> {
     let bytes = fetch_public(&url, 40 * 1024 * 1024)?;
-    let img = image::load_from_memory(&bytes)
+    // Cap dimensions/allocation during decode so a small but highly compressed
+    // image (a decompression bomb) can't blow up memory in `to_rgba8()`.
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(&bytes))
+        .with_guessed_format()
+        .map_err(|e| e.to_string())?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16384);
+    limits.max_image_height = Some(16384);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader
+        .decode()
         .map_err(|e| format!("decode failed: {e}"))?
         .to_rgba8();
     let (w, h) = img.dimensions();
@@ -711,12 +730,21 @@ fn show_settings_window(app: &tauri::AppHandle) {
         let _ = w.set_focus();
         return;
     }
+    // Match the Messenger windows' topmost state so the dialog isn't trapped
+    // behind them when Always on Top is enabled.
+    let aot = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .always_on_top;
     let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title("Carrier Settings")
         .inner_size(460.0, 620.0)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
+        .always_on_top(aot)
         .build();
 }
 

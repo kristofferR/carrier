@@ -106,6 +106,8 @@
   function classify(href) {
     try {
       const u = new URL(href, location.href);
+      // mailto:/tel: links open in the OS handler.
+      if (u.protocol === "mailto:" || u.protocol === "tel:") return { external: true };
       if (!/^https?:$/.test(u.protocol)) return { external: false };
       // Keep OAuth/login popups inside the app so social logins work.
       if (isAuth(u)) return { external: false };
@@ -244,20 +246,26 @@
   );
 
   /* ----------------------------- Spell check ---------------------------- */
-  function applySpellcheck() {
+  const SPELL_SEL = '[contenteditable="true"], textarea, input[type="text"], input[type="search"]';
+  function applySpellcheckNow() {
     const on = window.__CARRIER_SETTINGS__?.spellcheck !== false;
-    const sel = '[contenteditable="true"], textarea, input[type="text"], input[type="search"]';
-    const set = (el) => el.setAttribute?.("spellcheck", on ? "true" : "false");
-    document.querySelectorAll(sel).forEach(set);
+    document.querySelectorAll(SPELL_SEL).forEach((el) => el.setAttribute?.("spellcheck", on ? "true" : "false"));
+  }
+  function applySpellcheck() {
+    applySpellcheckNow();
     new MutationObserver((muts) => {
+      const on = window.__CARRIER_SETTINGS__?.spellcheck !== false;
+      const set = (el) => el.setAttribute?.("spellcheck", on ? "true" : "false");
       for (const m of muts)
         for (const n of m.addedNodes)
           if (n.nodeType === 1) {
-            if (n.matches?.(sel)) set(n);
-            n.querySelectorAll?.(sel).forEach(set);
+            if (n.matches?.(SPELL_SEL)) set(n);
+            n.querySelectorAll?.(SPELL_SEL).forEach(set);
           }
     }).observe(document.documentElement, { childList: true, subtree: true });
   }
+  // Re-apply when the Rust side pushes updated settings at runtime (no reload).
+  window.addEventListener("carrier:settings", applySpellcheckNow);
   if (document.readyState === "loading")
     document.addEventListener("DOMContentLoaded", applySpellcheck);
   else applySpellcheck();
