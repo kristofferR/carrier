@@ -221,7 +221,10 @@ fn apply_settings(app: &tauri::AppHandle, s: &Settings) {
             // Removing the only way back, so make sure the main window is
             // visible before dropping the tray icon.
             show_main(app);
-            *tray = None; // dropping the TrayIcon removes it
+            // `build()` also registers a clone in Tauri's resource table, so
+            // dropping our handle alone leaves the icon visible — remove it by id.
+            let _ = app.remove_tray_by_id("carrier-tray");
+            *tray = None;
         }
         _ => {}
     }

@@ -9,7 +9,8 @@
   // Subframes also receive init scripts (notably on Windows); only run in top.
   if (window.top !== window.self) return;
 
-  const invoke = (cmd, args) => window.__TAURI__?.core?.invoke(cmd, args);
+  // Internal bridge directly (no global window.__TAURI__ exposed to the page).
+  const invoke = (cmd, args) => window.__TAURI_INTERNALS__?.invoke(cmd, args);
 
   /* ------------------------------- Toast -------------------------------- */
   let toastEl = null;

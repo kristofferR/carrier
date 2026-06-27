@@ -66,7 +66,10 @@
   );
 
   /* ------------------------- Tauri bridge + toast ----------------------- */
-  const invoke = (cmd, args) => window.__TAURI__?.core?.invoke(cmd, args);
+  // Use the always-present internal bridge directly instead of the global
+  // `window.__TAURI__` (which `withGlobalTauri` would also expose to Facebook's
+  // own scripts).
+  const invoke = (cmd, args) => window.__TAURI_INTERNALS__?.invoke(cmd, args);
   const toast = (msg) =>
     window.__carrierToast ? window.__carrierToast(msg) : console.log("[carrier]", msg);
 
@@ -283,7 +286,7 @@
   // Bridge the page's Web Notification API to native OS notifications so new
   // messages notify you even when Carrier is in the background.
   (function notificationBridge() {
-    if (!window.__TAURI__) return;
+    if (!window.__TAURI_INTERNALS__) return;
     function CarrierNotification(title, options = {}) {
       try {
         invoke("send_notification", { title: String(title || "Messenger"), body: String(options.body || "") });
@@ -305,7 +308,7 @@
   /* ------------------------- Theme sync (native) ------------------------ */
   // Keep the native window chrome in step with the page's light/dark theme.
   (function themeSync() {
-    if (!window.__TAURI__ || !window.matchMedia) return;
+    if (!window.__TAURI_INTERNALS__ || !window.matchMedia) return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const push = () => {
       try {

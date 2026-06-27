@@ -58,7 +58,7 @@
     </footer>
 
     <script>
-      const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
+      const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
       const FIELDS = [
         ["always_on_top", "Always on Top", "Keep the window above other apps."],
         ["show_tray", "Show System Tray", "Show a Carrier icon in the system tray."],
