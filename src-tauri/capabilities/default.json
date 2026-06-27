@@ -8,7 +8,10 @@
       "https://www.facebook.com",
       "https://*.facebook.com",
       "https://www.messenger.com",
-      "https://*.messenger.com"
+      "https://*.messenger.com",
+      "https://accounts.google.com",
+      "https://login.microsoftonline.com",
+      "https://appleid.apple.com"
     ]
   },
   "permissions": [

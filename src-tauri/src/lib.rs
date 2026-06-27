@@ -763,7 +763,11 @@ fn show_settings_window(app: &tauri::AppHandle) {
 
 #[tauri::command]
 fn open_settings_window(app: tauri::AppHandle) {
-    show_settings_window(&app);
+    // Build the window off the synchronous command handler —
+    // `WebviewWindowBuilder::new` can deadlock on Windows otherwise.
+    tauri::async_runtime::spawn(async move {
+        show_settings_window(&app);
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -888,7 +892,10 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
         }
     };
     match event.id().as_ref() {
-        "preferences" => show_settings_window(app),
+        "preferences" => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move { show_settings_window(&app) });
+        }
         "reload" => eval("location.reload()"),
         "back" => eval("history.back()"),
         "forward" => eval("history.forward()"),
@@ -919,12 +926,17 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
             }
         }
         "new_window" => {
-            let s = app.state::<AppState>().settings.lock().unwrap().clone();
-            let n = app
-                .state::<AppState>()
-                .next_window
-                .fetch_add(1, Ordering::SeqCst);
-            let _ = build_app_window(app, &format!("win-{n}"), &s);
+            // Off the event-loop handler to avoid the Windows window-creation
+            // deadlock.
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let s = app.state::<AppState>().settings.lock().unwrap().clone();
+                let n = app
+                    .state::<AppState>()
+                    .next_window
+                    .fetch_add(1, Ordering::SeqCst);
+                let _ = build_app_window(&app, &format!("win-{n}"), &s);
+            });
         }
         "clear_cache" => {
             clear_cache(app);

@@ -177,6 +177,7 @@
   async function copyImageSrc(src) {
     if (src.startsWith("blob:") || src.startsWith("data:")) {
       const blob = await (await fetch(src)).blob();
+      if (blob.size > MAX_BLOB) throw new Error("image too large");
       await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
     } else {
       await invoke("copy_image", { url: src });
