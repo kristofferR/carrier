@@ -1072,12 +1072,15 @@ pub fn run() {
                     };
                     // Only hide to the tray if one was actually created (tray
                     // creation can fail, e.g. on a Linux session without an
-                    // AppIndicator); otherwise let the window close (quit).
+                    // AppIndicator); otherwise closing the main window quits the
+                    // app (don't let an open Settings dialog keep it running).
                     if hide && has_tray {
                         api.prevent_close();
                         if let Some(w) = handle.get_webview_window("main") {
                             let _ = w.hide();
                         }
+                    } else {
+                        handle.exit(0);
                     }
                 }
             });

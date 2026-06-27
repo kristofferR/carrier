@@ -353,10 +353,8 @@
       // The login page has both an identifier and a password field. Checkpoint /
       // re-auth / recovery forms have only a password field, so require both to
       // avoid hiding their required UI.
-      const isLogin =
-        onFacebook() &&
-        !!document.querySelector('input[name="pass"]') &&
-        !!document.querySelector('input[name="email"]');
+      const pass = document.querySelector('input[name="pass"]');
+      const isLogin = onFacebook() && !!pass && !!document.querySelector('input[name="email"]');
       if (!isLogin) {
         if (html.hasAttribute("data-carrier-login")) {
           html.removeAttribute("data-carrier-login");

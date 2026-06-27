@@ -8,7 +8,12 @@
       "https://www.facebook.com",
       "https://*.facebook.com",
       "https://www.messenger.com",
-      "https://*.messenger.com"
+      "https://*.messenger.com",
+      "https://*.fbcdn.net",
+      "https://*.fbsbx.com",
+      "https://meta.com",
+      "https://*.meta.com",
+      "https://*.oculus.com"
     ]
   },
   "permissions": [
