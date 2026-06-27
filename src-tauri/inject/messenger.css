@@ -91,3 +91,10 @@ html[data-carrier-darkswap] [data-carrier-login-anc] {
   background-color: transparent !important;
   background-image: none !important;
 }
+
+/* ----------------------------- Compact mode ----------------------------- */
+/* Collapse the conversation-info side panel for a roomier message area.
+   (Selectors verified against the live Messenger DOM.) */
+html[data-carrier-compact] div[role="complementary"] {
+  display: none !important;
+}

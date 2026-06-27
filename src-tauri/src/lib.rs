@@ -8,9 +8,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, MenuItemBuilder, SubmenuBuilder},
@@ -25,7 +23,7 @@ use url::Url;
 /// The page we wrap.
 const HOME_URL: &str = "https://www.facebook.com/messages";
 
-/// Injected assets (clean-room; see `inject/`).
+/// Injected assets (see `inject/`).
 const INJECT_CSS: &str = include_str!("../inject/messenger.css");
 const INJECT_JS: &str = include_str!("../inject/messenger.js");
 const INJECT_PANEL: &str = include_str!("../inject/panel.js");
@@ -65,6 +63,14 @@ struct Settings {
     /// next launch (takes effect after restart).
     multi_instance: bool,
     spellcheck: bool,
+    /// Show the unread-message count on the Dock/taskbar icon.
+    unread_badge: bool,
+    /// Force the Messenger theme: "system" (follow FB), "light", or "dark".
+    theme: String,
+    /// Hide the conversation-info side panel for a roomier chat view.
+    compact: bool,
+    /// macOS: run as a menu-bar app with no Dock icon (requires the tray).
+    menu_bar_only: bool,
 }
 
 impl Default for Settings {
@@ -77,6 +83,10 @@ impl Default for Settings {
             hide_on_close: true,
             multi_instance: false,
             spellcheck: true,
+            unread_badge: true,
+            theme: "system".into(),
+            compact: false,
+            menu_bar_only: false,
         }
     }
 }
@@ -150,20 +160,37 @@ fn show_main(app: &tauri::AppHandle) {
     }
 }
 
+/// Show the main window if it's hidden/unfocused, or hide it if it's already the
+/// focused window — so a tray click toggles the app.
+fn toggle_main(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let visible = window.is_visible().unwrap_or(false);
+        let focused = window.is_focused().unwrap_or(false);
+        if visible && focused {
+            let _ = window.hide();
+        } else {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }
+}
+
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<TrayIcon> {
-    let show_item = MenuItem::with_id(app, "show", "Open Carrier", true, None::<&str>)?;
+    // Left-click toggles the window; right-click offers only Quit (showing is the
+    // click itself, so a separate "Open" item would be redundant).
     let quit_item = MenuItem::with_id(app, "quit", "Quit Carrier", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+    let menu = Menu::with_items(app, &[&quit_item])?;
 
     TrayIconBuilder::with_id("carrier-tray")
         .tooltip("Carrier")
         .icon(app.default_window_icon().expect("bundled icon").clone())
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show_main(app),
-            "quit" => app.exit(0),
-            _ => {}
+        .on_menu_event(|app, event| {
+            if event.id.as_ref() == "quit" {
+                app.exit(0);
+            }
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -172,7 +199,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<TrayIcon> {
                 ..
             } = event
             {
-                show_main(tray.app_handle());
+                toggle_main(tray.app_handle());
             }
         })
         .build(app)
@@ -192,12 +219,16 @@ fn sync_autostart(app: &tauri::AppHandle, want: bool) -> Result<(), String> {
 /// separately by [`sync_autostart`]; everything here is best-effort.
 fn apply_settings(app: &tauri::AppHandle, s: &Settings) {
     let settings_json = serde_json::to_string(s).ok();
+    let theme = theme_for(s);
     for (label, window) in app.webview_windows() {
         // Apply to every window (incl. the Settings dialog) so toggling Always
         // on Top from the dialog doesn't leave the dialog stuck behind the
         // now-topmost Messenger windows.
         let _ = window.set_always_on_top(s.always_on_top);
         if label != "settings" {
+            // Drive the native window chrome (incl. the macOS title bar) from the
+            // theme preference so it matches the page instead of staying light.
+            let _ = window.set_theme(theme);
             // Push the new prefs to the running page so JS-side settings
             // (spell-check) refresh without a reload.
             if let Some(ref json) = settings_json {
@@ -208,10 +239,12 @@ fn apply_settings(app: &tauri::AppHandle, s: &Settings) {
         }
     }
 
-    // Tray: create or tear down to match `show_tray`.
+    // Tray: create or tear down. Menu-bar-only needs one (it's the only way to
+    // reach a Dock-less app), so force it on then.
+    let want_tray = s.show_tray || s.menu_bar_only;
     let state = app.state::<AppState>();
     let mut tray = state.tray.lock().unwrap();
-    match (s.show_tray, tray.is_some()) {
+    match (want_tray, tray.is_some()) {
         (true, false) => {
             if let Ok(t) = build_tray(app) {
                 *tray = Some(t);
@@ -227,6 +260,17 @@ fn apply_settings(app: &tauri::AppHandle, s: &Settings) {
             *tray = None;
         }
         _ => {}
+    }
+    drop(tray);
+
+    // macOS: hide/show the Dock icon (menu-bar-only mode).
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(if s.menu_bar_only {
+            tauri::ActivationPolicy::Accessory
+        } else {
+            tauri::ActivationPolicy::Regular
+        });
     }
 }
 
@@ -336,39 +380,6 @@ fn is_fetchable_media_host(url: &Url) -> bool {
         .any(|s| host == *s || host.ends_with(&format!(".{s}")))
 }
 
-/// Fetch a Facebook/Messenger media URL into memory (capped), with timeouts and
-/// no redirects.
-fn fetch_public(url: &str, cap: u64) -> Result<Vec<u8>, String> {
-    use std::io::Read;
-    let parsed = Url::parse(url).map_err(|e| e.to_string())?;
-    if !is_fetchable_media_host(&parsed) {
-        return Err("refusing to fetch a non-Messenger URL".into());
-    }
-    // No redirects: the allowlisted host must not be able to bounce us elsewhere
-    // (SSRF). Accept 2xx only.
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(30))
-        .timeout_read(Duration::from_secs(60))
-        .redirects(0)
-        .build();
-    let resp = agent
-        .get(url)
-        .call()
-        .map_err(|e| format!("fetch failed: {e}"))?;
-    if resp.status() >= 300 {
-        return Err("refusing to follow a redirect".into());
-    }
-    let mut bytes = Vec::new();
-    resp.into_reader()
-        .take(cap)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 >= cap {
-        return Err("response too large".into());
-    }
-    Ok(bytes)
-}
-
 fn downloads_dir() -> Option<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
     let base = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from);
@@ -396,8 +407,8 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Reduce a filename to a single safe path component so it can't escape the
-/// Downloads folder (path separators, NUL, and Windows drive/reserved chars).
+/// Strip path separators and shell-unsafe characters so a page-supplied name
+/// can't escape the Downloads folder; falls back to "download".
 fn sanitize_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -429,6 +440,48 @@ fn filename_from_url(url: &Url) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or("download");
     sanitize_filename(&percent_decode(raw))
+}
+
+/// True for filenames whose extension is a directly-executable type, so a remote
+/// page can't quietly drop malware in Downloads. Media, documents and archives
+/// (the things you'd actually save from Messenger) are all allowed.
+fn is_unsafe_download(name: &str) -> bool {
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    matches!(
+        ext.as_str(),
+        "exe"
+            | "msi"
+            | "bat"
+            | "cmd"
+            | "com"
+            | "scr"
+            | "ps1"
+            | "vbs"
+            | "vbe"
+            | "js"
+            | "jse"
+            | "wsf"
+            | "wsh"
+            | "hta"
+            | "dmg"
+            | "pkg"
+            | "app"
+            | "command"
+            | "scpt"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "run"
+            | "bin"
+            | "jar"
+            | "jnlp"
+            | "deb"
+            | "rpm"
+            | "appimage"
+    )
 }
 
 /// Avoid clobbering an existing file by appending " (n)".
@@ -513,181 +566,6 @@ fn reset_settings(app: tauri::AppHandle, state: State<AppState>) -> Result<Setti
     store_settings(&app, &state, Settings::default())
 }
 
-/// Open a URL in the user's default browser, unwrapping FB tracking redirects.
-#[tauri::command]
-fn open_external(url: String) -> Result<(), String> {
-    let parsed = Url::parse(&url).map_err(|e| e.to_string())?;
-    let target = unwrap_tracking(&parsed).unwrap_or(url);
-    // Only hand safe web schemes to the OS opener so a page script can't ask us
-    // to open arbitrary `file://`/custom-scheme URIs.
-    let scheme = Url::parse(&target)
-        .map(|u| u.scheme().to_string())
-        .unwrap_or_default();
-    if !matches!(scheme.as_str(), "http" | "https" | "mailto" | "tel") {
-        return Err(format!("refusing to open non-web URL ({scheme})"));
-    }
-    open::that(target).map_err(|e| e.to_string())
-}
-
-/// Download an image and place it on the system clipboard.
-#[tauri::command]
-fn copy_image(url: String) -> Result<(), String> {
-    let bytes = fetch_public(&url, 40 * 1024 * 1024)?;
-    // Cap dimensions/allocation during decode so a small but highly compressed
-    // image (a decompression bomb) can't blow up memory in `to_rgba8()`.
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(&bytes))
-        .with_guessed_format()
-        .map_err(|e| e.to_string())?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(16384);
-    limits.max_image_height = Some(16384);
-    limits.max_alloc = Some(256 * 1024 * 1024);
-    reader.limits(limits);
-    let img = reader
-        .decode()
-        .map_err(|e| format!("decode failed: {e}"))?
-        .to_rgba8();
-    let (w, h) = img.dimensions();
-
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard
-        .set_image(arboard::ImageData {
-            width: w as usize,
-            height: h as usize,
-            bytes: std::borrow::Cow::Owned(img.into_raw()),
-        })
-        .map_err(|e| e.to_string())
-}
-
-/// Download a URL to the Downloads folder; returns the saved path. Async +
-/// `spawn_blocking` so the blocking fetch/copy of a large file doesn't run on the
-/// main thread (which would freeze the UI).
-#[tauri::command]
-async fn download_file(url: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || download_file_blocking(url))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-fn download_file_blocking(url: String) -> Result<String, String> {
-    let parsed = Url::parse(&url).map_err(|e| e.to_string())?;
-    if !is_fetchable_media_host(&parsed) {
-        return Err("refusing to fetch a non-Messenger URL".into());
-    }
-    let dir = downloads_dir().ok_or("no downloads directory")?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = unique_path(dir.join(filename_from_url(&parsed)));
-
-    // Connect + read timeouts (the read timeout fires only when a stalled
-    // connection sends nothing, so it doesn't abort a slow-but-progressing
-    // download) and no redirects (SSRF).
-    use std::io::Read;
-    const CAP: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(30))
-        .timeout_read(Duration::from_secs(120))
-        .redirects(0)
-        .build();
-    let resp = agent.get(&url).call().map_err(|e| e.to_string())?;
-    if resp.status() >= 300 {
-        return Err("refusing to follow a redirect".into());
-    }
-    let mut reader = resp.into_reader().take(CAP);
-    let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
-    // Don't leave a partial (errored) or oversized file behind.
-    match std::io::copy(&mut reader, &mut file) {
-        Ok(n) if n < CAP => {}
-        other => {
-            drop(file);
-            let _ = std::fs::remove_file(&path);
-            return Err(match other {
-                Ok(_) => "file too large".to_string(),
-                Err(e) => e.to_string(),
-            });
-        }
-    }
-    Ok(path.to_string_lossy().into_owned())
-}
-
-/// Save base64-encoded bytes (e.g. a `blob:`/`data:` image the page rendered
-/// but that isn't a plain downloadable URL) to the Downloads folder. Async +
-/// `spawn_blocking` to keep the base64 decode + write off the main thread.
-#[tauri::command]
-async fn download_file_by_binary(filename: String, data: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || download_by_binary_blocking(filename, data))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-fn download_by_binary_blocking(filename: String, data: String) -> Result<String, String> {
-    // Cap the decoded size (~3/4 of the base64 length) before allocating.
-    const MAX_BYTES: usize = 512 * 1024 * 1024;
-    if data.len() / 4 * 3 > MAX_BYTES {
-        return Err("file too large".into());
-    }
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data.as_bytes())
-        .map_err(|e| e.to_string())?;
-    let dir = downloads_dir().ok_or("no downloads directory")?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = unique_path(dir.join(sanitize_filename(&filename)));
-    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().into_owned())
-}
-
-/// Show a native OS notification (used by the injected Web Notification shim).
-#[tauri::command]
-fn send_notification(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
-    app.notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show()
-        .map_err(|e| e.to_string())
-}
-
-/// Sync the native window theme with the page's `prefers-color-scheme`.
-#[tauri::command]
-fn update_theme_mode(app: tauri::AppHandle, mode: String) -> Result<(), String> {
-    let theme = match mode.as_str() {
-        "dark" => Some(tauri::Theme::Dark),
-        "light" => Some(tauri::Theme::Light),
-        _ => None, // follow the system
-    };
-    for w in app.webview_windows().values() {
-        let _ = w.set_theme(theme);
-    }
-    Ok(())
-}
-
-/// Open the OS privacy settings for camera/microphone (when a call is blocked).
-#[tauri::command]
-fn open_privacy_settings(kind: Option<String>) -> Result<(), String> {
-    let mic = kind.as_deref() == Some("microphone");
-    let _ = mic;
-    #[cfg(target_os = "macos")]
-    let url = if mic {
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-    } else {
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
-    };
-    #[cfg(target_os = "windows")]
-    let url = if mic {
-        "ms-settings:privacy-microphone"
-    } else {
-        "ms-settings:privacy-webcam"
-    };
-    #[cfg(target_os = "linux")]
-    return Ok(());
-    #[cfg(not(target_os = "linux"))]
-    open::that(url).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn restart_app(app: tauri::AppHandle) {
-    app.restart();
-}
-
 /// Clear the WebView's cookies/cache/storage, then relaunch.
 fn clear_cache(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -696,12 +574,6 @@ fn clear_cache(app: &tauri::AppHandle) {
     if let Ok(cache) = app.path().app_cache_dir() {
         let _ = std::fs::remove_dir_all(&cache);
     }
-}
-
-#[tauri::command]
-fn clear_cache_and_restart(app: tauri::AppHandle) {
-    clear_cache(&app);
-    app.restart();
 }
 
 /// Check GitHub releases for an update; download & install if found.
@@ -730,10 +602,29 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<String, String> {
 // Window
 // ---------------------------------------------------------------------------
 
+/// The window/chrome theme to apply for a given preference: an explicit
+/// light/dark, or `None` to follow the system.
+fn theme_for(s: &Settings) -> Option<tauri::Theme> {
+    match s.theme.as_str() {
+        "dark" => Some(tauri::Theme::Dark),
+        "light" => Some(tauri::Theme::Light),
+        _ => None,
+    }
+}
+
+/// True when the window should render dark (forced dark, or system-dark).
+fn is_dark(s: &Settings) -> bool {
+    match s.theme.as_str() {
+        "dark" => true,
+        "light" => false,
+        _ => matches!(dark_light::detect(), dark_light::Mode::Dark),
+    }
+}
+
 /// A theme-appropriate window background so there's no white flash before the
 /// remote page paints (Facebook glares white in dark mode while loading).
-fn splash_background() -> Color {
-    if matches!(dark_light::detect(), dark_light::Mode::Dark) {
+fn splash_background(s: &Settings) -> Color {
+    if is_dark(s) {
         Color(24, 25, 26, 255) // Facebook dark
     } else {
         Color(255, 255, 255, 255)
@@ -754,7 +645,8 @@ fn build_app_window(
     .title("Carrier")
     .inner_size(1200.0, 780.0)
     .min_inner_size(420.0, 520.0)
-    .background_color(splash_background())
+    .theme(theme_for(settings))
+    .background_color(splash_background(settings))
     .user_agent(user_agent())
     .initialization_script(init_script(settings))
     .on_navigation(|url| {
@@ -784,9 +676,23 @@ fn build_app_window(
             if !allowed {
                 return false;
             }
+            // Prefer the WebView's suggested filename — it carries the real
+            // extension (e.g. a blob the page named via `download="photo.png"`);
+            // fall back to the URL's last path segment.
+            let suggested = destination
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|n| !n.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| filename_from_url(&url));
+            let name = sanitize_filename(&suggested);
+            // Don't silently save an executable a page might push to Downloads.
+            if is_unsafe_download(&name) {
+                return false;
+            }
             if let Some(dir) = downloads_dir() {
                 let _ = std::fs::create_dir_all(&dir);
-                *destination = unique_path(dir.join(filename_from_url(&url)));
+                *destination = unique_path(dir.join(name));
             }
         }
         true
@@ -824,15 +730,6 @@ fn show_settings_window(app: &tauri::AppHandle) {
         .build();
 }
 
-#[tauri::command]
-fn open_settings_window(app: tauri::AppHandle) {
-    // Build the window off the synchronous command handler —
-    // `WebviewWindowBuilder::new` can deadlock on Windows otherwise.
-    tauri::async_runtime::spawn(async move {
-        show_settings_window(&app);
-    });
-}
-
 // ---------------------------------------------------------------------------
 // Native menu
 // ---------------------------------------------------------------------------
@@ -858,11 +755,8 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .build()?;
 
     let new_window = mi("new_window", "New Window", Some("CmdOrCtrl+N"))?;
-    let print = mi("print", "Print…", Some("CmdOrCtrl+P"))?;
     let file = SubmenuBuilder::new(app, "File")
         .item(&new_window)
-        .separator()
-        .item(&print)
         .separator()
         .close_window()
         .build()?;
@@ -892,6 +786,17 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let zreset = mi("zoom_reset", "Actual Size", Some("CmdOrCtrl+0"))?;
     let zin = mi("zoom_in", "Zoom In", Some("CmdOrCtrl+="))?;
     let zout = mi("zoom_out", "Zoom Out", Some("CmdOrCtrl+-"))?;
+    let theme_sys = mi("theme_system", "System", None)?;
+    let theme_light = mi("theme_light", "Light", None)?;
+    let theme_dark = mi("theme_dark", "Dark", None)?;
+    let theme_menu = SubmenuBuilder::new(app, "Theme")
+        .item(&theme_sys)
+        .item(&theme_light)
+        .item(&theme_dark)
+        .build()?;
+    // No accelerator here: Cmd/Ctrl+Shift+S is handled page-side (works in
+    // menu-bar-only mode too); a menu accelerator would double-fire with it.
+    let compact = mi("compact", "Toggle Compact Mode (⇧⌘S)", None)?;
     let aot = mi("always_on_top", "Toggle Always on Top", None)?;
     let devtools = mi(
         "devtools",
@@ -907,24 +812,14 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             .item(&zin)
             .item(&zout)
             .separator()
+            .item(&theme_menu)
+            .item(&compact)
             .item(&aot);
         #[cfg(debug_assertions)]
         let b = b.separator().item(&devtools);
         let _ = &devtools;
         b.build()?
     };
-
-    let back = mi("back", "Back", Some("CmdOrCtrl+["))?;
-    let fwd = mi("forward", "Forward", Some("CmdOrCtrl+]"))?;
-    let home = mi("home", "Home", Some("CmdOrCtrl+Shift+H"))?;
-    let copy_url = mi("copy_url", "Copy Current URL", None)?;
-    let history = SubmenuBuilder::new(app, "History")
-        .item(&back)
-        .item(&fwd)
-        .separator()
-        .item(&home)
-        .item(&copy_url)
-        .build()?;
 
     let maximize = mi("maximize", "Zoom", None)?;
     let window = SubmenuBuilder::new(app, "Window")
@@ -934,7 +829,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .close_window()
         .build()?;
 
-    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &history, &window])
+    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window])
 }
 
 /// The focused Messenger window (a `main`/`win-*` window), falling back to
@@ -946,6 +841,19 @@ fn target_window(app: &tauri::AppHandle) -> Option<WebviewWindow> {
         .find(|(label, w)| label.as_str() != "settings" && w.is_focused().unwrap_or(false))
         .map(|(_, w)| w)
         .or_else(|| app.get_webview_window("main"))
+}
+
+/// Apply a settings change made from the native menu: mutate, persist, re-apply.
+/// (Used for view-style toggles — not autostart, which syncs separately.)
+fn mutate_settings(app: &tauri::AppHandle, f: impl FnOnce(&mut Settings)) {
+    let state = app.state::<AppState>();
+    let mut s = state.settings.lock().unwrap().clone();
+    f(&mut s);
+    if let Err(e) = save_settings(app, &s) {
+        eprintln!("carrier: failed to save settings: {e}");
+    }
+    *state.settings.lock().unwrap() = s.clone();
+    apply_settings(app, &s);
 }
 
 fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
@@ -960,25 +868,17 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
             tauri::async_runtime::spawn(async move { show_settings_window(&app) });
         }
         "reload" => eval("location.reload()"),
-        "back" => eval("history.back()"),
-        "forward" => eval("history.forward()"),
-        "home" => eval(&format!("location.assign('{HOME_URL}')")),
         "zoom_in" => eval("window.__carrierZoomIn && window.__carrierZoomIn()"),
         "zoom_out" => eval("window.__carrierZoomOut && window.__carrierZoomOut()"),
         "zoom_reset" => eval("window.__carrierZoomReset && window.__carrierZoomReset()"),
-        "copy_url" => eval(
-            "navigator.clipboard && navigator.clipboard.writeText(location.href); \
-             window.__carrierToast && window.__carrierToast('Link copied')",
-        ),
         "paste_match_style" => eval(
             "navigator.clipboard && navigator.clipboard.readText().then(function (t) { \
              document.execCommand('insertText', false, t); })",
         ),
-        "print" => {
-            if let Some(w) = target_window(app) {
-                let _ = w.print();
-            }
-        }
+        "theme_system" => mutate_settings(app, |s| s.theme = "system".into()),
+        "theme_light" => mutate_settings(app, |s| s.theme = "light".into()),
+        "theme_dark" => mutate_settings(app, |s| s.theme = "dark".into()),
+        "compact" => mutate_settings(app, |s| s.compact = !s.compact),
         "maximize" => {
             if let Some(w) = target_window(app) {
                 if w.is_maximized().unwrap_or(false) {
@@ -1005,20 +905,7 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
             clear_cache(app);
             app.restart();
         }
-        "always_on_top" => {
-            let state = app.state::<AppState>();
-            let mut s = state.settings.lock().unwrap().clone();
-            s.always_on_top = !s.always_on_top;
-            *state.settings.lock().unwrap() = s.clone();
-            if let Err(e) = save_settings(app, &s) {
-                eprintln!("carrier: failed to save settings: {e}");
-            }
-            for (label, w) in app.webview_windows() {
-                if label != "settings" {
-                    let _ = w.set_always_on_top(s.always_on_top);
-                }
-            }
-        }
+        "always_on_top" => mutate_settings(app, |s| s.always_on_top = !s.always_on_top),
         "devtools" =>
         {
             #[cfg(debug_assertions)]
@@ -1106,16 +993,6 @@ pub fn run() {
             get_settings,
             set_settings,
             reset_settings,
-            open_external,
-            open_settings_window,
-            copy_image,
-            download_file,
-            download_file_by_binary,
-            send_notification,
-            update_theme_mode,
-            open_privacy_settings,
-            restart_app,
-            clear_cache_and_restart,
             check_for_updates
         ])
         .setup(move |app| {
@@ -1181,6 +1058,32 @@ pub fn run() {
                         }
                     }
                 });
+            });
+
+            // Unread count from the page → tray tooltip (the Dock badge is set
+            // page-side; this keeps the tray useful in menu-bar-only mode).
+            let h = app.handle().clone();
+            app.listen_any("carrier:unread", move |event| {
+                let n: i64 = event.payload().trim().parse().unwrap_or(0);
+                if let Some(tray) = h.state::<AppState>().tray.lock().unwrap().as_ref() {
+                    let tip = if n > 0 {
+                        format!("Carrier — {n} unread")
+                    } else {
+                        "Carrier".to_string()
+                    };
+                    let _ = tray.set_tooltip(Some(&tip));
+                }
+            });
+
+            // Cmd/Ctrl+Shift+S on the page toggles compact mode; persist it.
+            let h = app.handle().clone();
+            app.listen_any("carrier:toggle-compact", move |_| {
+                let state = h.state::<AppState>();
+                let mut s = state.settings.lock().unwrap().clone();
+                s.compact = !s.compact;
+                let _ = save_settings(&h, &s);
+                *state.settings.lock().unwrap() = s.clone();
+                apply_settings(&h, &s);
             });
 
             Ok(())

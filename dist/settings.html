@@ -65,6 +65,9 @@
         ["start_to_tray", "Start to Tray", "Launch hidden, into the tray."],
         ["autostart", "Start on System Startup", "Launch Carrier when you log in."],
         ["hide_on_close", "Hide on Close", "Closing the window hides it instead of quitting."],
+        ["unread_badge", "Unread Badge", "Show the unread count on the Dock / taskbar icon."],
+        ["compact", "Compact Mode", "Hide the conversation-info panel for a roomier chat view."],
+        ["menu_bar_only", "Menu Bar Only", "macOS: hide the Dock icon and live in the menu bar (needs the tray)."],
         ["spellcheck", "Spell check", "Underline misspelled words while typing (applies on reload)."],
         ["multi_instance", "Multi Instance", "Allow more than one window (experimental, needs restart)."],
       ];
@@ -103,6 +106,24 @@
       function render() {
         const root = document.getElementById("rows");
         root.innerHTML = "";
+        // Theme picker (System / Light / Dark).
+        {
+          const row = document.createElement("label");
+          row.className = "row";
+          const sel = document.createElement("select");
+          for (const [val, txt] of [["system", "System"], ["light", "Light"], ["dark", "Dark"]]) {
+            const o = document.createElement("option");
+            o.value = val;
+            o.textContent = txt;
+            if ((settings.theme || "system") === val) o.selected = true;
+            sel.appendChild(o);
+          }
+          sel.onchange = () => persist("theme", sel.value);
+          const text = document.createElement("div");
+          text.innerHTML = `<div class="label">Theme</div><div class="hint">Force the Messenger theme, or follow your system.</div>`;
+          row.append(sel, text);
+          root.appendChild(row);
+        }
         for (const [key, label, hint] of FIELDS) {
           const row = document.createElement("label");
           row.className = "row";
