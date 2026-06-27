@@ -198,12 +198,15 @@ fn apply_settings(app: &tauri::AppHandle, s: &Settings) -> Result<(), String> {
         }
     }
 
-    // Autostart (Start on System Startup) — capture the result to surface it.
+    // Autostart (Start on System Startup) — only (re)register when the
+    // preference actually differs from the current OS state, so an unrelated
+    // change (spell-check, theme, …) doesn't fail on a machine where autostart
+    // registration is unavailable. Capture the result to surface it.
     let mgr = app.autolaunch();
-    let autostart = if s.autostart {
-        mgr.enable()
-    } else {
-        mgr.disable()
+    let autostart = match mgr.is_enabled() {
+        Ok(current) if current == s.autostart => Ok(()),
+        _ if s.autostart => mgr.enable(),
+        _ => mgr.disable(),
     };
 
     // Tray: create or tear down to match `show_tray`.
