@@ -302,6 +302,11 @@
       try {
         notify({ title: String(title || "Messenger"), body: String(options.body || "") });
       } catch (_) {}
+      // Nudge the auto-refresh so the conversation view catches up even when
+      // Facebook's in-WebView live sync stalls.
+      try {
+        window.__carrierOnNotification?.();
+      } catch (_) {}
       this.title = title;
       this.onclick = null;
       this.close = () => {};
@@ -314,6 +319,50 @@
     try {
       Object.defineProperty(window, "Notification", { value: CarrierNotification, writable: true, configurable: true });
     } catch (_) {}
+  })();
+
+  /* --------------------------- Auto-refresh ----------------------------- */
+  // Facebook's live message sync sometimes stalls inside a system WebView, so
+  // the open conversation can lag behind. Reload to catch up: at least once per
+  // new-message notification, plus a periodic refresh while in the background.
+  // A reload is deferred while a message is half-typed so a draft is never lost.
+  (function autoRefresh() {
+    let pending = false;
+    let timer = null;
+    const composerHasText = () => {
+      try {
+        for (const el of document.querySelectorAll('[contenteditable="true"]')) {
+          if ((el.textContent || "").trim().length > 0) return true;
+        }
+      } catch (_) {}
+      return false;
+    };
+    const maybeReload = () => {
+      if (!pending) return;
+      // Never yank the page out from under a draft or an in-progress call.
+      if (composerHasText() || window.__carrierInCall) {
+        timer = setTimeout(maybeReload, 8000);
+        return;
+      }
+      pending = false;
+      location.reload();
+    };
+    const schedule = (delay) => {
+      pending = true;
+      clearTimeout(timer);
+      timer = setTimeout(maybeReload, delay);
+    };
+    // Reload shortly after a new-message notification, but only while the window
+    // is unfocused — that's when Facebook's live sync throttles and the view
+    // goes stale. When you're actively reading, live sync works, so we leave the
+    // page alone. (Debounced to batch a burst of notifications into one reload.)
+    window.__carrierOnNotification = () => {
+      if (!document.hasFocus()) schedule(4000);
+    };
+    // Regular refresh so an unfocused, stale window keeps catching up.
+    setInterval(() => {
+      if (!document.hasFocus()) schedule(2000);
+    }, 4 * 60 * 1000);
   })();
 
   /* ------------------------- Theme sync (native) ------------------------ */
@@ -339,7 +388,17 @@
     const original = md.getUserMedia.bind(md);
     md.getUserMedia = async function (constraints) {
       try {
-        return await original(constraints);
+        const stream = await original(constraints);
+        // Track the call so the auto-refresh doesn't reload mid-call.
+        window.__carrierInCall = true;
+        const tracks = stream.getTracks();
+        let live = tracks.length;
+        tracks.forEach((t) =>
+          t.addEventListener("ended", () => {
+            if (--live <= 0) window.__carrierInCall = false;
+          }),
+        );
+        return stream;
       } catch (err) {
         if (err && (err.name === "NotAllowedError" || err.name === "NotFoundError")) {
           const kind = constraints && constraints.video ? "camera" : "microphone";
