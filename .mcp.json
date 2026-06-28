@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "tauri-mcp": {
-      "command": "npx",
-      "args": ["-y", "tauri-plugin-mcp-server"],
+      "command": "node",
+      "args": ["node_modules/tauri-plugin-mcp-server/build/index.js"],
       "env": {
         "TAURI_MCP_IPC_PATH": "/tmp/tauri-mcp.sock"
       }

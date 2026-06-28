@@ -11,6 +11,7 @@
     "icon": "tauri icon"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "^2",
+    "tauri-plugin-mcp-server": "0.1.0"
   }
 }

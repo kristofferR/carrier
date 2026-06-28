@@ -135,6 +135,29 @@
           text.innerHTML = `<div class="label">${label}</div><div class="hint">${hint}</div>`;
           row.append(cb, text);
           root.appendChild(row);
+
+          // The unread badge can count either unread messages or unread chats.
+          if (key === "unread_badge") {
+            const mrow = document.createElement("label");
+            mrow.className = "row";
+            const sel = document.createElement("select");
+            for (const [val, txt] of [
+              ["messages", "Unread messages"],
+              ["conversations", "Unread conversations"],
+            ]) {
+              const o = document.createElement("option");
+              o.value = val;
+              o.textContent = txt;
+              if ((settings.badge_mode || "messages") === val) o.selected = true;
+              sel.appendChild(o);
+            }
+            sel.disabled = !settings.unread_badge;
+            sel.onchange = () => persist("badge_mode", sel.value);
+            const mtext = document.createElement("div");
+            mtext.innerHTML = `<div class="label">Badge counts</div><div class="hint">Whether the badge shows unread messages or unread conversations.</div>`;
+            mrow.append(sel, mtext);
+            root.appendChild(mrow);
+          }
         }
       }
 

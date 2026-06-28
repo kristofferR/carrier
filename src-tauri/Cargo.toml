@@ -46,8 +46,10 @@ tauri-plugin-mcp = { git = "https://github.com/P3GLEG/tauri-plugin-mcp", optiona
 # background never shows through. Flip `drawsBackground` off ourselves via KVC.
 # Same versions Tauri already pulls in, so no extra build cost.
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSValue"] }
+objc2-user-notifications = { version = "0.3.2", features = ["UNUserNotificationCenter", "UNNotificationSettings", "block2"] }
 
 [profile.release]
 panic = "abort"
