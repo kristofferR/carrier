@@ -144,8 +144,7 @@ close.
 Carrier ships with the Tauri updater wired up: it checks
 `releases/latest/download/latest.json` and can download & install a verified
 (minisign-signed) update — press <kbd>F2</kbd> or use **Settings → Check for
-updates**. Release builds are produced by CI, which holds the signing and Apple
-notarization secrets.
+updates**.
 
 ## Disclaimer
 
