@@ -40,8 +40,8 @@ jobs:
             target: aarch64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
-    # Stable, predictable asset names (e.g. Carrier_1.0.0_mac_arm.dmg) that the
-    # README download links point at.
+    # Predictable, versioned asset names (e.g. Carrier_1.0.0_mac_arm.dmg). The
+    # publish job rewrites the README download links to each release's version.
     env:
       ASSET_PLATFORM: ${{ contains(matrix.target, 'apple-darwin') && 'mac' || contains(matrix.target, 'windows') && 'win' || 'lin' }}
       ASSET_ARCH: ${{ startsWith(matrix.target, 'aarch64') && 'arm' || 'x64' }}
@@ -100,7 +100,8 @@ jobs:
           releaseBody: "Download the installer for your platform below."
           releaseDraft: true
           prerelease: false
-          # Keep these aliases stable: the README links build asset URLs from them.
+          # Versioned names; the publish job keeps the README's versioned
+          # download links pointed at the latest release.
           assetNamePattern: "Carrier_[version]_${{ env.ASSET_PLATFORM }}_${{ env.ASSET_ARCH }}[_setup][ext]"
           # The release config enables createUpdaterArtifacts (kept out of the
           # base config so a local `tauri build` doesn't require the signing key).
@@ -118,7 +119,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${APPLE_ID}" ]; then
+          if [ -z "${APPLE_ID}" ] || [ -z "${APPLE_PASSWORD}" ] || [ -z "${APPLE_TEAM_ID}" ]; then
+            # A tagged release promises a signed, notarized download — fail rather
+            # than publish an unsigned/unstapled .dmg. Manual (workflow_dispatch)
+            # runs may still skip when the secrets aren't configured.
+            if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+              echo "Missing Apple notarization secrets for a tagged release." >&2
+              exit 1
+            fi
             echo "No Apple credentials configured — skipping .dmg notarization."
             exit 0
           fi
@@ -130,12 +138,193 @@ jobs:
           cp "${SRC}" "${DEST}"
           gh release upload "${{ github.ref_name }}" "${DEST}" --clobber
 
+      # A no-installer option for Windows: just the standalone .exe (WebView2 is
+      # provided by the OS on Win10+/11). The app exe is the only top-level *.exe
+      # in the release dir (deps/build scripts live in subfolders), so glob it
+      # rather than hardcode carrier.exe vs Carrier.exe.
+      - name: Create Windows portable zip
+        if: contains(matrix.target, 'pc-windows')
+        shell: pwsh
+        run: |
+          $arch = if ("${{ matrix.target }}" -match "aarch64") { "arm" } else { "x64" }
+          $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $zipName = "Carrier_${version}_win_${arch}_portable.zip"
+          $exe = Get-ChildItem -Path "src-tauri/target/${{ matrix.target }}/release" -Filter "*.exe" -File | Select-Object -First 1
+          if (-not $exe) { throw "No app .exe found in release dir" }
+          $staging = "portable-staging"
+          New-Item -ItemType Directory -Path $staging | Out-Null
+          Copy-Item $exe.FullName "$staging/Carrier.exe"
+          Compress-Archive -Path "$staging/*" -DestinationPath $zipName
+          "PORTABLE_ZIP=$zipName" >> $env:GITHUB_ENV
+
+      - name: Upload Windows portable zip
+        if: contains(matrix.target, 'pc-windows')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "${{ env.PORTABLE_ZIP }}" --clobber
+
   # Flip the draft to public only after every build has uploaded its assets.
   publish:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # The Tauri updater reads each bundle's signature from latest.json (it is
+      # embedded inline there), never from the standalone *.sig files. So these
+      # are pure release-page clutter — drop them before the release goes public.
+      # latest.json and every bundle are kept, so auto-update is unaffected.
+      - name: Remove vestigial .sig assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ids=$(gh api "repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" \
+            --jq '.assets[] | select(.name | endswith(".sig")) | .id')
+          for id in $ids; do
+            echo "Deleting .sig asset $id"
+            gh api --method DELETE "repos/${{ github.repository }}/releases/assets/$id"
+          done
+
       - name: Publish release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "${{ github.ref_name }}" --draft=false --repo "${{ github.repository }}"
+
+      # Keep the README's versioned download links pointed at this release, so
+      # they never go stale. Commit straight back to the default branch via the
+      # Contents API (same approach the IPTVChecker release flow uses).
+      - name: Point README download links at this release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          SHA=$(gh api "repos/${REPO}/contents/README.md" --jq '.sha')
+          gh api "repos/${REPO}/contents/README.md" --jq '.content' | base64 -d > /tmp/README.md
+          cp /tmp/README.md /tmp/README.orig
+          # Rewrite both the release-tag path segment and the versioned filename
+          # in every download link, e.g. download/v1.0.0/Carrier_1.0.0_… -> this tag.
+          sed -i -E "s#/releases/download/v[0-9.]+/Carrier_[0-9.]+_#/releases/download/${TAG}/Carrier_${VERSION}_#g" /tmp/README.md
+          if cmp -s /tmp/README.md /tmp/README.orig; then
+            echo "README download links already current for ${TAG}."
+            exit 0
+          fi
+          gh api --method PUT "repos/${REPO}/contents/README.md" \
+            -f message="docs: point download links at ${TAG} [skip ci]" \
+            -f content="$(base64 -w 0 /tmp/README.md)" \
+            -f sha="${SHA}" \
+            -f branch="main"
+
+      # Update the Homebrew cask in kristofferR/homebrew-tap so users get
+      # `brew install --cask carrier` and `brew upgrade`. Skips automatically if
+      # HOMEBREW_TAP_TOKEN (a PAT with write access to the tap) isn't configured.
+      - name: Update Homebrew tap
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "HOMEBREW_TAP_TOKEN not configured, skipping tap update"
+            exit 0
+          fi
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          REPO="${{ github.repository }}"
+          TAP_REPO="kristofferR/homebrew-tap"
+
+          # Download the assets the cask references (token has access to this repo).
+          mkdir -p /tmp/assets
+          for asset in \
+            "Carrier_${VERSION}_mac_arm.dmg" \
+            "Carrier_${VERSION}_mac_x64.dmg" \
+            "Carrier_${VERSION}_lin_arm.AppImage" \
+            "Carrier_${VERSION}_lin_x64.AppImage"; do
+            GH_TOKEN="$RELEASE_TOKEN" gh release download "$GITHUB_REF_NAME" --repo "$REPO" --pattern "$asset" --dir /tmp/assets
+          done
+
+          # Compute SHA256 hashes (fails if any asset is missing).
+          SHA_MAC_ARM=$(sha256sum "/tmp/assets/Carrier_${VERSION}_mac_arm.dmg" | cut -d' ' -f1)
+          SHA_MAC_X64=$(sha256sum "/tmp/assets/Carrier_${VERSION}_mac_x64.dmg" | cut -d' ' -f1)
+          SHA_LIN_ARM=$(sha256sum "/tmp/assets/Carrier_${VERSION}_lin_arm.AppImage" | cut -d' ' -f1)
+          SHA_LIN_X64=$(sha256sum "/tmp/assets/Carrier_${VERSION}_lin_x64.AppImage" | cut -d' ' -f1)
+
+          cat > /tmp/carrier.rb << CASK_EOF
+          cask "carrier" do
+            version "${VERSION}"
+
+            on_macos do
+              on_arm do
+                sha256 "${SHA_MAC_ARM}"
+
+                url "https://github.com/${REPO}/releases/download/v#{version}/Carrier_#{version}_mac_arm.dmg",
+                    verified: "github.com/${REPO}/"
+              end
+
+              on_intel do
+                sha256 "${SHA_MAC_X64}"
+
+                url "https://github.com/${REPO}/releases/download/v#{version}/Carrier_#{version}_mac_x64.dmg",
+                    verified: "github.com/${REPO}/"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                sha256 "${SHA_LIN_ARM}"
+
+                url "https://github.com/${REPO}/releases/download/v#{version}/Carrier_#{version}_lin_arm.AppImage",
+                    verified: "github.com/${REPO}/"
+              end
+
+              on_intel do
+                sha256 "${SHA_LIN_X64}"
+
+                url "https://github.com/${REPO}/releases/download/v#{version}/Carrier_#{version}_lin_x64.AppImage",
+                    verified: "github.com/${REPO}/"
+              end
+
+              container type: :naked
+            end
+
+            name "Carrier"
+            desc "Distraction-free desktop client for Facebook Messenger"
+            homepage "https://github.com/${REPO}"
+
+            on_macos do
+              app "Carrier.app"
+            end
+
+            on_linux do
+              on_arm do
+                binary "Carrier_#{version}_lin_arm.AppImage", target: "carrier"
+              end
+
+              on_intel do
+                binary "Carrier_#{version}_lin_x64.AppImage", target: "carrier"
+              end
+            end
+          end
+          CASK_EOF
+
+          # Strip the heredoc indentation.
+          sed -i 's/^          //' /tmp/carrier.rb
+
+          CONTENT=$(base64 -w 0 /tmp/carrier.rb)
+          EXISTING_SHA=$(gh api "repos/${TAP_REPO}/contents/Casks/carrier.rb" --jq '.sha' 2>/dev/null || echo "")
+
+          if [ -n "$EXISTING_SHA" ]; then
+            gh api --method PUT "repos/${TAP_REPO}/contents/Casks/carrier.rb" \
+              -f message="Update Carrier to ${VERSION}" \
+              -f content="$CONTENT" \
+              -f sha="$EXISTING_SHA" \
+              -f branch="main"
+          else
+            gh api --method PUT "repos/${TAP_REPO}/contents/Casks/carrier.rb" \
+              -f message="Add Carrier ${VERSION}" \
+              -f content="$CONTENT" \
+              -f branch="main"
+          fi
