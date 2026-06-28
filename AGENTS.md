@@ -2,7 +2,7 @@
 
 Carrier is a tiny **Tauri v2** desktop client for **Facebook Messenger** (wraps
 `facebook.com/messages` in a chrome-stripped native window). Repo:
-**`kristofferR/carrier`** (use the **kristofferR** GitHub account). **v1.0.0 is
+**`kristofferR/Carrier`** (use the **kristofferR** GitHub account). **v1.0.0 is
 released.** **Cross-platform: macOS, Windows, and Linux** (CI builds all six
 targets). The "macOS theme rendering" section below is platform-specific; on
 Windows/Linux the window chrome follows `set_theme` directly and there's none of
@@ -39,21 +39,22 @@ in the repo).
 
 ---
 
-## tauri-mcp — dev webview inspection (set up this session; activates next session)
+## tauri-mcp — dev webview inspection
 
 Lets an agent inspect/drive the running webview: `execute_js`, `query_page`
 (DOM), **`take_screenshot` (background — no window popping to the foreground)**,
 click/type, etc. Plugin: [P3GLEG/tauri-plugin-mcp](https://github.com/P3GLEG/tauri-plugin-mcp).
+On `main` (committed `d8a25a6`).
 
 - Gated behind the Cargo **`mcp` feature** → **release builds never compile it**.
 - Build with it: `bun run tauri build --debug --features mcp --bundles app`.
   The running app then opens the IPC socket `/tmp/tauri-mcp.sock` and its window
   title reads **"Carrier (debug)"** (all debug builds are marked via `APP_TITLE`).
 - `.mcp.json` registers the `tauri-mcp` server (`npx -y tauri-plugin-mcp-server`,
-  `TAURI_MCP_IPC_PATH=/tmp/tauri-mcp.sock`). **On a new session you'll be prompted
-  to approve the project MCP server — approve it.**
-- **Carrier (debug) must be RUNNING** for the tools to connect. A "Carrier (debug)"
-  mcp build is currently installed in `/Applications`.
+  `TAURI_MCP_IPC_PATH=/tmp/tauri-mcp.sock`). **Approve the project MCP server when
+  a new session prompts for it.**
+- **A "Carrier (debug)" build must be RUNNING** for the tools to connect — build it
+  with the command above, then `ditto` it into `/Applications`.
 
 ---
 
@@ -107,24 +108,25 @@ already pulls in).
 
 ## Current state / outstanding work
 
-- **Theme/login/title-bar fixes:** DONE — committed `4a308e0` on branch
-  **`fix/v1.0-review`**.
-- **PR #4** (`fix/v1.0-review`) is the **v1.0 code review** PR. Its base was
-  re-pointed to **`pre-v1.0`** so CodeRabbit reviews the **entire v1.0 diff**
-  (not just the post-release tweaks). **Codex is rate-limited** (can't review).
-  CodeRabbit re-flagged the `want_tray` test as tautological — **stale**:
-  `wants_tray()` was extracted and the tests call it (verify, then resolve the
-  thread). When the loop converges: **re-point PR #4 base → `main` and merge.**
-- **Uncommitted right now** (fold into the badge-fix commit): the tauri-mcp setup
-  (`Cargo.toml` `mcp` feature + git dep, `lib.rs` plugin reg), `APP_TITLE`
-  "(debug)" marking, and `.mcp.json`.
-- **Badge bug — issue #5** (1 unread, no Dock badge). `unreadBadge` parses
-  `document.title` for `(N)` → `set_badge_count`. Command + permission verified
-  correct; likely the title doesn't carry `(N)` (or only when backgrounded).
-  **First task next session: launch "Carrier (debug)", use tauri-mcp `execute_js`
-  to read `document.title` + the unread DOM, then fix** (maybe DOM-based detection).
-- **Cleanup:** reinstall the **clean signed release** over the "Carrier (debug)"
-  build for daily use once debugging is done.
+- **All post-v1.0 work is merged to `main`** (2026-06-28, tip `e7c9ea2`): the v1.0
+  helper tests, `wants_tray()` extraction, the macOS theme/login rendering, the
+  tauri-mcp dev tooling, and the CodeRabbit fixes from the #4/#6 reviews (the
+  single-flight recreate guard, login-bg restore, macOS-gated rebuild, and the
+  close-to-tray handler reattach). It landed by cherry-pick **directly onto `main`**
+  over PR #8's CI work — no review PR was merged.
+- **Review PRs are done / superseded:** #4 (`fix/v1.0-review`) and #6
+  (`review/v1.0-clean`) are closed; #7 (`v1.0-review`) is an **isolated,
+  do-not-merge** CodeRabbit review of the squashed v1.0.0 release. Codex stayed
+  rate-limited throughout. The dead branches were deleted; `pre-v1.0` is kept as a
+  snapshot base.
+- **Badge bug — issue #5** (1 unread, no Dock badge) — **still open, in progress on
+  branch `fix/badge-issue-5`** (its own worktree). `unreadBadge` parses
+  `document.title` for `(N)` → `set_badge_count`; command + permission verified
+  correct, so the title likely doesn't carry `(N)` (or only when backgrounded).
+  Approach: run a "Carrier (debug)" build, use tauri-mcp `execute_js` to read
+  `document.title` + the unread DOM, then fix (likely DOM-based detection).
+- **Cleanup:** reinstall the **clean signed release** over any "Carrier (debug)"
+  build for daily use once badge debugging is done.
 
 ---
 
@@ -133,6 +135,7 @@ already pulls in).
 - GitHub: **kristofferR** (`gh auth switch -u kristofferR`). Trigger CodeRabbit
   **only** through `crq` (never post `@coderabbitai review` directly). A
   `crq autoreview` daemon may be running.
-- Commits: branch off (never commit to `main` directly), one logical change,
+- Commits: branch off by default — though the maintainer may explicitly ask for a
+  direct push to `main` (as with the post-v1.0 merge above). One logical change,
   end with the `Claude-Session:` footer, **no AI attribution**, non-closing issue
   refs (`Ref #5`).
