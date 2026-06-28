@@ -176,6 +176,12 @@ fn toggle_main(app: &tauri::AppHandle) {
     }
 }
 
+/// Whether a tray icon should exist: when the user asked for one, or when
+/// menu-bar-only mode is on (the only way back to a Dock-less app).
+fn wants_tray(s: &Settings) -> bool {
+    s.show_tray || s.menu_bar_only
+}
+
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<TrayIcon> {
     // Left-click toggles the window; right-click offers only Quit (showing is the
     // click itself, so a separate "Open" item would be redundant).
@@ -241,7 +247,7 @@ fn apply_settings(app: &tauri::AppHandle, s: &Settings) {
 
     // Tray: create or tear down. Menu-bar-only needs one (it's the only way to
     // reach a Dock-less app), so force it on then.
-    let want_tray = s.show_tray || s.menu_bar_only;
+    let want_tray = wants_tray(s);
     let state = app.state::<AppState>();
     let mut tray = state.tray.lock().unwrap();
     match (want_tray, tray.is_some()) {
@@ -1381,36 +1387,29 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn want_tray_logic_show_tray_dominates() {
+    fn wants_tray_true_when_show_tray_set() {
         // show_tray defaults to true.
-        let s = Settings::default();
-        assert!(s.show_tray || s.menu_bar_only);
+        assert!(wants_tray(&Settings::default()));
     }
 
     #[test]
-    fn want_tray_logic_menu_bar_only_forces_tray_even_without_show_tray() {
+    fn wants_tray_menu_bar_only_forces_it_even_without_show_tray() {
         let s = Settings {
             show_tray: false,
             menu_bar_only: true,
             ..Default::default()
         };
-        assert!(
-            s.show_tray || s.menu_bar_only,
-            "menu_bar_only must force tray on"
-        );
+        assert!(wants_tray(&s), "menu_bar_only must force the tray on");
     }
 
     #[test]
-    fn want_tray_logic_both_false_disables_tray() {
+    fn wants_tray_false_when_both_off() {
         let s = Settings {
             show_tray: false,
             menu_bar_only: false,
             ..Default::default()
         };
-        assert!(
-            !(s.show_tray || s.menu_bar_only),
-            "no tray when both are false"
-        );
+        assert!(!wants_tray(&s), "no tray when both are off");
     }
 
     // -----------------------------------------------------------------------
