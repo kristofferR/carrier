@@ -40,8 +40,8 @@ jobs:
             target: aarch64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
-    # Stable, predictable asset names (e.g. Carrier_1.0.0_mac_arm.dmg) that the
-    # README download links point at.
+    # Stable, version-less asset names (e.g. Carrier_mac_arm.dmg) so the README
+    # can point at persistent /releases/latest/download/ URLs.
     env:
       ASSET_PLATFORM: ${{ contains(matrix.target, 'apple-darwin') && 'mac' || contains(matrix.target, 'windows') && 'win' || 'lin' }}
       ASSET_ARCH: ${{ startsWith(matrix.target, 'aarch64') && 'arm' || 'x64' }}
@@ -100,8 +100,9 @@ jobs:
           releaseBody: "Download the installer for your platform below."
           releaseDraft: true
           prerelease: false
-          # Keep these aliases stable: the README links build asset URLs from them.
-          assetNamePattern: "Carrier_[version]_${{ env.ASSET_PLATFORM }}_${{ env.ASSET_ARCH }}[_setup][ext]"
+          # Version-less, stable names so the README can link persistent
+          # /releases/latest/download/ URLs that never need a per-release edit.
+          assetNamePattern: "Carrier_${{ env.ASSET_PLATFORM }}_${{ env.ASSET_ARCH }}[_setup][ext]"
           # The release config enables createUpdaterArtifacts (kept out of the
           # base config so a local `tauri build` doesn't require the signing key).
           args: --target ${{ matrix.target }} --config src-tauri/tauri.conf.release.json
@@ -118,7 +119,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${APPLE_ID}" ]; then
+          if [ -z "${APPLE_ID}" ] || [ -z "${APPLE_PASSWORD}" ] || [ -z "${APPLE_TEAM_ID}" ]; then
+            # A tagged release promises a signed, notarized download — fail rather
+            # than publish an unsigned/unstapled .dmg. Manual (workflow_dispatch)
+            # runs may still skip when the secrets aren't configured.
+            if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+              echo "Missing Apple notarization secrets for a tagged release." >&2
+              exit 1
+            fi
             echo "No Apple credentials configured — skipping .dmg notarization."
             exit 0
           fi
@@ -126,7 +134,7 @@ jobs:
           if [ -z "${SRC}" ]; then echo "No .dmg found."; exit 0; fi
           xcrun notarytool submit "${SRC}" --apple-id "${APPLE_ID}" --password "${APPLE_PASSWORD}" --team-id "${APPLE_TEAM_ID}" --wait
           xcrun stapler staple "${SRC}"
-          DEST="Carrier_${GITHUB_REF_NAME#v}_${ASSET_PLATFORM}_${ASSET_ARCH}.dmg"
+          DEST="Carrier_${ASSET_PLATFORM}_${ASSET_ARCH}.dmg"
           cp "${SRC}" "${DEST}"
           gh release upload "${{ github.ref_name }}" "${DEST}" --clobber
 
