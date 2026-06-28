@@ -62,11 +62,7 @@ On `main` (committed `d8a25a6`).
 
 - **`src-tauri/src/lib.rs`** — the Rust shell: window/tray/menu/settings/theme,
   `on_navigation` (off-site → default browser), `on_download` (media only, blocks
-  executables; rewrites into `~/Downloads` and **fails closed** if that dir can't
-  be resolved/created), updater. macOS prompts for Downloads TCC consent on the
-  first save — the message comes from `NSDownloadsFolderUsageDescription` in
-  `Info.plist` (non-sandboxed apps still need consent for `~/Downloads` since 10.15;
-  no entitlement, the OS prompts automatically given a stable signing identity).
+  executables), updater.
 - **`src-tauri/inject/`** — injected at document-start: `messenger.css` (hides FB
   chrome + theme/compact/login CSS), `messenger.js` (shortcuts, zoom, image
   viewer, notifications, unread badge, force-theme, login tidy), `panel.js`
@@ -110,33 +106,11 @@ already pulls in).
 
 ---
 
-## Current state / outstanding work
+## Current state
 
-`main` holds the released **v1.0.0** plus all post-v1.0 work: the helper tests,
-`wants_tray()` extraction, macOS theme/login rendering, tauri-mcp dev tooling,
-the #4/#6 CodeRabbit fixes, and the still-valid findings from the #7 review
-(release-workflow tag-injection hardening, download fail-closed, fetch-`ok`
-checks, theme-class clear on System, tray-gated Dock hiding, lock-held
-`mutate_settings`, and the `NSDownloadsFolderUsageDescription` Downloads prompt).
-All of it landed by **direct push to `main`**, no review PR merged.
-
-**Open issues:**
-- **#5 — unread Dock/taskbar badge missing** (bug; the only functional gap). WIP
-  is **uncommitted** in the `fix/badge-issue-5` worktree (new `mcp-bridge.js`,
-  `messenger.js`/`lib.rs` edits) on a **stale base** that predates the post-v1.0
-  work — needs finishing **and** rebasing onto current `main`. `unreadBadge`
-  parses `document.title` for `(N)` → `set_badge_count`; command + permission are
-  verified correct, so the title likely doesn't carry `(N)`. Fix is DOM-based
-  detection: run a "Carrier (debug)" build, use tauri-mcp `execute_js` to read the
-  unread DOM.
-- **#9 — tabbed settings redesign** (enhancement, just begun): only an uncommitted
-  `dist/settings.html` edit in the `feature/tabbed-settings` worktree.
-
-**Housekeeping:** PR #7 is a spent review sandbox (its findings are now on `main`)
-— close it. Reinstall the **clean signed release** over any "Carrier (debug)"
-build for daily use. `pre-v1.0` is a kept snapshot base; the `carrier-land`
-detached-HEAD worktree is a removable leftover. (Closed/superseded review PRs: #4
-`fix/v1.0-review`, #6 `review/v1.0-clean`.)
+v1.0.0 is released; `main` is the trunk. **Live work lives on GitHub, not here** —
+`gh issue list` / `gh pr list` for open bugs, enhancements, and WIP branches.
+`pre-v1.0` is a kept snapshot base.
 
 ---
 
