@@ -464,23 +464,36 @@
     };
 
     let last = null;
-    // `force` re-applies even when the count is unchanged — used for the initial
-    // applications, which must survive the async macOS badge-authorization grant
-    // (it lands shortly after launch) and the chat list's first render.
-    const apply = (force) => {
-      const s = window.__CARRIER_SETTINGS__ || {};
-      const n =
-        s.unread_badge === false
-          ? 0
-          : s.badge_mode === "conversations"
-            ? countUnreadConversations()
-            : countUnreadMessages();
+    const setBadge = (n, force) => {
       if (n === last && !force) return;
       last = n;
       // NB: the command's argument is `value` (the Tauri `setter!` macro names
       // it that), not `count` — passing `count` silently clears the badge.
       invoke("plugin:window|set_badge_count", { value: n > 0 ? n : null })?.catch?.(() => {});
       invoke("plugin:event|emit", { event: "carrier:unread", payload: n })?.catch?.(() => {});
+    };
+
+    // `force` re-applies even when the count is unchanged — used for the initial
+    // applications, which must survive the async macOS badge-authorization grant
+    // (it lands shortly after launch) and the chat list's first render.
+    const apply = (force) => {
+      const s = window.__CARRIER_SETTINGS__ || {};
+      if (s.unread_badge === false) {
+        setBadge(0, force);
+        return;
+      }
+      const conv = s.badge_mode === "conversations";
+      const n = conv ? countUnreadConversations() : countUnreadMessages();
+      // While Facebook is reloading the page, the title carries no "(N)" and the
+      // chat list hasn't rendered yet, so both counts read 0. The OS keeps the
+      // Dock badge across the reload on its own, so don't clear it during that
+      // window — it would blink off and back. Only a "ready" page can be trusted
+      // to mean 0 unread. (A non-zero count only happens once ready anyway.)
+      const ready = conv
+        ? document.querySelector('a[href*="/t/"]') !== null
+        : /Messenger|Facebook/i.test(document.title || "");
+      if (n === 0 && !ready) return;
+      setBadge(n, force);
     };
 
     // Re-evaluate whenever the title changes — Facebook updates "(N)" the moment a
