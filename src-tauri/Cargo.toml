@@ -16,6 +16,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+# Dev-only AI/DOM inspection over a local socket. Enable with `--features mcp`
+# (e.g. `cargo tauri dev --features mcp`); never enabled for release builds.
+mcp = ["dep:tauri-plugin-mcp"]
+
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-updater = "2"
@@ -33,6 +38,8 @@ dark-light = "1"
 # Already in the tree via Tauri; the short delay when recreating a window on a
 # theme switch (the macOS title bar can only be re-themed at window creation).
 tokio = { version = "1", features = ["time"] }
+# Dev-only (the `mcp` feature): webview inspection over a local socket.
+tauri-plugin-mcp = { git = "https://github.com/P3GLEG/tauri-plugin-mcp", optional = true }
 
 # macOS only: Tauri doesn't disable the WKWebView's opaque white background on
 # macOS (the webview layer is unimplemented there), so the theme-coloured window

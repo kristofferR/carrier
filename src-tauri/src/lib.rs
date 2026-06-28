@@ -23,6 +23,14 @@ use url::Url;
 /// The page we wrap.
 const HOME_URL: &str = "https://www.facebook.com/messages";
 
+/// Window/app title. Debug builds are marked so a dev build (e.g. the
+/// tauri-mcp one) isn't mistaken for a release install.
+const APP_TITLE: &str = if cfg!(debug_assertions) {
+    "Carrier (debug)"
+} else {
+    "Carrier"
+};
+
 /// Injected assets (see `inject/`).
 const INJECT_CSS: &str = include_str!("../inject/messenger.css");
 const INJECT_JS: &str = include_str!("../inject/messenger.js");
@@ -192,7 +200,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<TrayIcon> {
     let menu = Menu::with_items(app, &[&quit_item])?;
 
     TrayIconBuilder::with_id("carrier-tray")
-        .tooltip("Carrier")
+        .tooltip(APP_TITLE)
         .icon(app.default_window_icon().expect("bundled icon").clone())
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -671,7 +679,7 @@ fn build_app_window(
         label,
         WebviewUrl::External(HOME_URL.parse().expect("valid home URL")),
     )
-    .title("Carrier")
+    .title(APP_TITLE)
     .inner_size(1200.0, 780.0)
     .min_inner_size(420.0, 520.0)
     .theme(theme_for(settings))
@@ -849,7 +857,7 @@ fn show_settings_window(app: &tauri::AppHandle) {
         (s.always_on_top, theme_for(&s))
     };
     let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
-        .title("Carrier Settings")
+        .title(format!("{APP_TITLE} Settings"))
         .inner_size(460.0, 620.0)
         .resizable(false)
         .maximizable(false)
@@ -873,7 +881,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     };
 
     let prefs = mi("preferences", "Settings…", Some("CmdOrCtrl+,"))?;
-    let app_menu = SubmenuBuilder::new(app, "Carrier")
+    let app_menu = SubmenuBuilder::new(app, APP_TITLE)
         .about(Some(AboutMetadata::default()))
         .separator()
         .item(&prefs)
@@ -1084,6 +1092,17 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default();
 
+    // Dev-only (the `mcp` feature): expose the webview to tauri-plugin-mcp for
+    // DOM/JS inspection. Not in the dependency graph for normal/release builds.
+    #[cfg(feature = "mcp")]
+    {
+        builder = builder.plugin(tauri_plugin_mcp::init_with_config(
+            tauri_plugin_mcp::PluginConfig::new(APP_TITLE.to_string())
+                .start_socket_server(true)
+                .socket_path("/tmp/tauri-mcp.sock".into()),
+        ));
+    }
+
     // Single-instance enforcement (unless the experimental multi-instance flag
     // is set). Must be registered first so it runs before any window is created.
     if !initial.multi_instance {
@@ -1200,9 +1219,9 @@ pub fn run() {
                 let n: i64 = event.payload().trim().parse().unwrap_or(0);
                 if let Some(tray) = h.state::<AppState>().tray.lock().unwrap().as_ref() {
                     let tip = if n > 0 {
-                        format!("Carrier — {n} unread")
+                        format!("{APP_TITLE} — {n} unread")
                     } else {
-                        "Carrier".to_string()
+                        APP_TITLE.to_string()
                     };
                     let _ = tray.set_tooltip(Some(&tip));
                 }
