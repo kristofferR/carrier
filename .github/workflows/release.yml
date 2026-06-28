@@ -136,7 +136,9 @@ jobs:
           xcrun stapler staple "${SRC}"
           DEST="Carrier_${GITHUB_REF_NAME#v}_${ASSET_PLATFORM}_${ASSET_ARCH}.dmg"
           cp "${SRC}" "${DEST}"
-          gh release upload "${{ github.ref_name }}" "${DEST}" --clobber
+          # Use the built-in $GITHUB_REF_NAME env var, not a ${{ }} template
+          # expansion: a crafted tag name could otherwise inject shell code here.
+          gh release upload "$GITHUB_REF_NAME" "${DEST}" --clobber
 
       # A no-installer option for Windows: just the standalone .exe (WebView2 is
       # provided by the OS on Win10+/11). The app exe is the only top-level *.exe
@@ -161,7 +163,9 @@ jobs:
         if: contains(matrix.target, 'pc-windows')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" "${{ env.PORTABLE_ZIP }}" --clobber
+        # Reference the tag/asset via shell env vars rather than ${{ }} expansion
+        # so a crafted tag name can't break out of the quotes and run as code.
+        run: gh release upload "$GITHUB_REF_NAME" "$PORTABLE_ZIP" --clobber
 
   # Flip the draft to public only after every build has uploaded its assets.
   publish:
@@ -177,17 +181,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          ids=$(gh api "repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" \
+          # Built-in env vars, not ${{ }} expansion — keeps a crafted tag name
+          # from injecting shell code into this run script.
+          ids=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" \
             --jq '.assets[] | select(.name | endswith(".sig")) | .id')
           for id in $ids; do
             echo "Deleting .sig asset $id"
-            gh api --method DELETE "repos/${{ github.repository }}/releases/assets/$id"
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$id"
           done
 
       - name: Publish release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${{ github.ref_name }}" --draft=false --repo "${{ github.repository }}"
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --repo "$GITHUB_REPOSITORY"
 
       # Keep the README's versioned download links pointed at this release, so
       # they never go stale. Commit straight back to the default branch via the
@@ -233,7 +239,7 @@ jobs:
           fi
 
           VERSION="${GITHUB_REF_NAME#v}"
-          REPO="${{ github.repository }}"
+          REPO="$GITHUB_REPOSITORY"
           TAP_REPO="kristofferR/homebrew-tap"
 
           # Download the assets the cask references (token has access to this repo).

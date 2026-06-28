@@ -199,7 +199,9 @@
   async function downloadSrc(src, fallbackName) {
     // Fetch into a same-origin blob so the `download` attribute is honoured (it's
     // ignored for cross-origin URLs) and so we can derive the real extension.
-    const blob = await (await fetch(src)).blob();
+    const res = await fetch(src);
+    if (!res.ok) throw new Error(`download failed (${res.status})`);
+    const blob = await res.blob();
     if (blob.size > MAX_BLOB) throw new Error("file too large");
     const href = URL.createObjectURL(blob);
     let name = filenameFromUrl(src) || fallbackName;
@@ -218,7 +220,9 @@
   }
 
   async function copyImageSrc(src) {
-    const blob = await (await fetch(src)).blob();
+    const res = await fetch(src);
+    if (!res.ok) throw new Error(`fetch failed (${res.status})`);
+    const blob = await res.blob();
     if (blob.size > MAX_BLOB) throw new Error("image too large");
     await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
   }
@@ -394,15 +398,26 @@
   // native window chrome is driven Rust-side from the same setting.
   (function forceTheme() {
     const html = document.documentElement;
+    // Track the class we forced so switching back to "system" can undo it live
+    // (settings re-apply on the same page without a reload — see carrier:settings).
+    let forcedClass = null;
     const apply = () => {
       const forced = window.__CARRIER_SETTINGS__?.theme;
-      if (forced !== "light" && forced !== "dark") return; // "system": leave FB alone
+      if (forced !== "light" && forced !== "dark") {
+        // "system": drop any class we previously forced, then leave FB alone.
+        if (forcedClass) {
+          html.classList.remove(forcedClass);
+          forcedClass = null;
+        }
+        return;
+      }
       const want = forced === "dark" ? "__fb-dark-mode" : "__fb-light-mode";
       const other = forced === "dark" ? "__fb-light-mode" : "__fb-dark-mode";
       if (!html.classList.contains(want) || html.classList.contains(other)) {
         html.classList.remove(other);
         html.classList.add(want);
       }
+      forcedClass = want;
     };
     apply();
     window.addEventListener("carrier:settings", apply);

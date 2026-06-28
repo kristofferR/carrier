@@ -293,16 +293,26 @@ fn apply_settings(app: &tauri::AppHandle, s: &Settings) {
         }
         _ => {}
     }
+    // Whether a tray icon is actually present after the reconcile above (e.g.
+    // build_tray may have failed). macOS uses this to avoid hiding the Dock with
+    // no tray to fall back on.
+    #[cfg(target_os = "macos")]
+    let tray_available = tray.is_some();
     drop(tray);
 
-    // macOS: hide/show the Dock icon (menu-bar-only mode).
+    // macOS: hide/show the Dock icon (menu-bar-only mode). Only go Dock-less when
+    // a tray exists to reach the app from — otherwise the app would have neither a
+    // Dock icon nor a tray and be unreachable, so stay Regular and show the window.
     #[cfg(target_os = "macos")]
     {
-        let _ = app.set_activation_policy(if s.menu_bar_only {
+        let _ = app.set_activation_policy(if s.menu_bar_only && tray_available {
             tauri::ActivationPolicy::Accessory
         } else {
             tauri::ActivationPolicy::Regular
         });
+        if s.menu_bar_only && !tray_available {
+            show_main(app);
+        }
     }
 }
 
@@ -726,10 +736,16 @@ fn build_app_window(
             if is_unsafe_download(&name) {
                 return false;
             }
-            if let Some(dir) = downloads_dir() {
-                let _ = std::fs::create_dir_all(&dir);
-                *destination = unique_path(dir.join(name));
+            // Fail closed: if we can't resolve/create the Downloads folder we
+            // can't enforce where the file lands, so refuse rather than let the
+            // WebView write to its own chosen destination.
+            let Some(dir) = downloads_dir() else {
+                return false;
+            };
+            if std::fs::create_dir_all(&dir).is_err() {
+                return false;
             }
+            *destination = unique_path(dir.join(name));
         }
         true
     })
@@ -1039,13 +1055,18 @@ fn target_window(app: &tauri::AppHandle) -> Option<WebviewWindow> {
 /// (Used for view-style toggles — not autostart, which syncs separately.)
 fn mutate_settings(app: &tauri::AppHandle, f: impl FnOnce(&mut Settings)) {
     let state = app.state::<AppState>();
-    let mut s = state.settings.lock().unwrap().clone();
-    let prev_theme = s.theme.clone();
-    f(&mut s);
+    // Mutate in place under the lock so concurrent callers can't read-modify-write
+    // a stale clone and lose each other's changes. Persist/apply after releasing
+    // it (apply_settings touches windows and must not run while holding the lock).
+    let (prev_theme, s) = {
+        let mut settings = state.settings.lock().unwrap();
+        let prev_theme = settings.theme.clone();
+        f(&mut settings);
+        (prev_theme, settings.clone())
+    };
     if let Err(e) = save_settings(app, &s) {
         eprintln!("carrier: failed to save settings: {e}");
     }
-    *state.settings.lock().unwrap() = s.clone();
     apply_settings(app, &s);
     // macOS needs a window rebuild to re-theme the title bar; other platforms
     // already re-themed the chrome live in apply_settings.
