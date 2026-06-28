@@ -36,6 +36,14 @@ const INJECT_CSS: &str = include_str!("../inject/messenger.css");
 const INJECT_JS: &str = include_str!("../inject/messenger.js");
 const INJECT_PANEL: &str = include_str!("../inject/panel.js");
 
+// The `mcp` feature wires a JS-eval responder into the remote Facebook page and
+// opens a local control socket — strictly a dev tool. Enabling it in a release
+// build is always a mistake, so fail the build loudly rather than risk shipping
+// it. (This guards every `#[cfg(feature = "mcp")]` path below, including the
+// plugin registration, since the feature can then only compile in debug.)
+#[cfg(all(feature = "mcp", not(debug_assertions)))]
+compile_error!("the `mcp` feature is dev-only and must not be enabled in release builds");
+
 // Dev-only (`mcp` feature): the tauri-plugin-mcp guest responder, injected into
 // the remote Facebook page so execute_js / get_dom round-trips work. Empty in
 // release builds, so the JS-eval responder never ships.
@@ -1196,8 +1204,19 @@ fn init_script(settings: &Settings) -> String {
   // to the snapshot on first load / if storage was cleared.
   var baked = {settings_literal};
   try {{
+    // Merge the cache onto the baked defaults (rather than replacing) so a stale
+    // or partial cached object can't drop fields the current build expects, and
+    // sanitise enum-like settings.
     var stored = JSON.parse(localStorage.getItem('__carrier_settings') || 'null');
-    window.__CARRIER_SETTINGS__ = stored && typeof stored === 'object' ? stored : baked;
+    if (stored && typeof stored === 'object' && !Array.isArray(stored)) {{
+      var merged = Object.assign({{}}, baked, stored);
+      if (merged.badge_mode !== 'messages' && merged.badge_mode !== 'conversations') {{
+        merged.badge_mode = baked.badge_mode;
+      }}
+      window.__CARRIER_SETTINGS__ = merged;
+    }} else {{
+      window.__CARRIER_SETTINGS__ = baked;
+    }}
   }} catch (e) {{
     window.__CARRIER_SETTINGS__ = baked;
   }}

@@ -513,12 +513,19 @@
         setTimeout(() => apply(false), 800);
       }, 120);
     };
-    if (document.head) {
-      new MutationObserver(schedule).observe(document.head, {
-        childList: true,
-        subtree: true,
-        characterData: true,
+    // This runs at document-start, where <head> may not exist yet; if so, wait
+    // for it rather than permanently falling back to the interval.
+    const headObserver = new MutationObserver(schedule);
+    const observeHead = () => {
+      if (!document.head) return false;
+      headObserver.observe(document.head, { childList: true, subtree: true, characterData: true });
+      return true;
+    };
+    if (!observeHead()) {
+      const waitForHead = new MutationObserver(() => {
+        if (observeHead()) waitForHead.disconnect();
       });
+      waitForHead.observe(document.documentElement, { childList: true, subtree: true });
     }
     window.addEventListener("carrier:settings", () => apply(true));
     setInterval(() => apply(false), 5000);
