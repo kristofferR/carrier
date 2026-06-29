@@ -74,8 +74,8 @@ Developer-ID signed and notarized.
   the system.
 - **Jump to a conversation** — <kbd>Cmd/Ctrl</kbd>+<kbd>1</kbd>–<kbd>9</kbd> jumps
   to the Nth chat in the list.
-- **Compact mode** — collapse the conversation-info panel for a roomier chat view
-  (<kbd>Cmd/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>).
+- **Toggle conversation info** — show or hide Messenger's conversation-info
+  sidebar (<kbd>Cmd/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd>).
 - **Menu-bar mode** (macOS) — optionally hide the Dock icon and live in the menu
   bar; click the tray icon to toggle the window.
 - **Stays out of the way** — closing hides to the tray, so you keep getting
@@ -91,14 +91,15 @@ Developer-ID signed and notarized.
   (wheel to zoom, drag or arrow keys to pan, <kbd>Esc</kbd> to close).
 - **Calls work** — camera/microphone are requested for Messenger voice & video.
 - **Remembers its window** — size and position persist between launches.
-- **Settings window** (<kbd>F3</kbd>) — theme, unread badge, compact, menu-bar
-  mode, always-on-top, tray, start-to-tray, start on login, hide-on-close,
-  spell-check, and experimental multi-window.
+- **Settings window** (<kbd>F3</kbd>) — theme, unread badge, hide names &
+  avatars, menu-bar mode, always-on-top, tray, start-to-tray, start on login,
+  hide-on-close, spell-check, and experimental multi-window.
 
 ## Keyboard shortcuts
 
 - <kbd>Cmd/Ctrl</kbd>+<kbd>1</kbd>–<kbd>9</kbd> — jump to the Nth conversation
-- <kbd>Cmd/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> — toggle compact mode
+- <kbd>Cmd/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> — toggle conversation information
+- <kbd>Cmd/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> — hide names &amp; avatars
 - <kbd>F2</kbd> check for updates &middot; <kbd>F3</kbd> settings &middot;
   <kbd>F5</kbd>/<kbd>Cmd-R</kbd> reload
 - <kbd>Cmd</kbd>+<kbd>-</kbd>/<kbd>=</kbd>/<kbd>0</kbd> — zoom out / in / reset
