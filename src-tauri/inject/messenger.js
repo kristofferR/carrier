@@ -383,9 +383,12 @@
 
     function CarrierNotification(title, options = {}) {
       const opts = options || {};
+      const s = window.__CARRIER_SETTINGS__ || {};
       // Only notify when Carrier is in the background — don't interrupt you with
-      // a notification for a conversation you're actively reading.
-      if (!document.hasFocus()) {
+      // a notification for a conversation you're actively reading — and never
+      // while notifications are muted. (The auto-refresh nudge below still runs
+      // when muted so a backgrounded window keeps catching up.)
+      if (!s.mute_notifications && !document.hasFocus()) {
         const id = ++notifySeq;
         // Facebook assigns `this.onclick` right after construction; hold onto
         // this instance so the click route can call it. Cap the map so a long
@@ -393,7 +396,10 @@
         notifyHandlers.set(id, this);
         if (notifyHandlers.size > 50)
           notifyHandlers.delete(notifyHandlers.keys().next().value);
-        avatarToDataUrl(opts.icon).then((icon) => {
+        // Hide preview: replace the sender name and message text with a generic
+        // notification, and skip the avatar so the sender's face never leaks.
+        const hidePreview = s.hide_notification_preview;
+        avatarToDataUrl(hidePreview ? "" : opts.icon).then((icon) => {
           // avatarToDataUrl is async (it decodes the image, up to ~2.5s), so
           // you may have returned to Carrier by the time it resolves — re-check
           // before emitting so we don't pop a notification for a conversation
@@ -407,8 +413,8 @@
             event: "carrier:notify",
             payload: {
               id,
-              title: String(title || "Messenger"),
-              body: String(opts.body || ""),
+              title: hidePreview ? "Messenger" : String(title || "Messenger"),
+              body: hidePreview ? "New message" : String(opts.body || ""),
               icon,
             },
           })?.catch?.(() => {});

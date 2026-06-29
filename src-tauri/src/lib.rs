@@ -100,6 +100,10 @@ struct Settings {
     compact: bool,
     /// macOS: run as a menu-bar app with no Dock icon (requires the tray).
     menu_bar_only: bool,
+    /// Suppress all desktop notifications for new messages.
+    mute_notifications: bool,
+    /// Notify without the sender name or message text (privacy).
+    hide_notification_preview: bool,
     /// Blur contact names and avatars (for screen-sharing / public spaces).
     hide_names_avatars: bool,
 }
@@ -119,6 +123,8 @@ impl Default for Settings {
             theme: "system".into(),
             compact: false,
             menu_bar_only: false,
+            mute_notifications: false,
+            hide_notification_preview: false,
             hide_names_avatars: false,
         }
     }
