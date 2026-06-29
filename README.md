@@ -57,9 +57,10 @@ Meta discontinued the official Messenger desktop app, and the standalone
 the Messenger web app (`facebook.com/messages`) in a small native window and
 strips away the surrounding Facebook chrome.
 
-Built with [Tauri](https://tauri.app) (Rust + the OS's native WebView), so it's a
-few MB and uses a fraction of the RAM of an Electron app. The macOS build is
-Developer-ID signed and notarized.
+Built with [Tauri](https://tauri.app) (Rust + the OS's native WebView) instead of a
+bundled Chromium, so the download is tiny — the macOS and Windows installers are
+**under 3 MB** (vs. 100 MB+ for an Electron app) — and it idles on a fraction of an
+Electron app's RAM. The macOS build is Developer-ID signed and notarized.
 
 ## Features
 
@@ -146,6 +147,23 @@ Carrier ships with the Tauri updater wired up: it checks
 `releases/latest/download/latest.json` and can download & install a verified
 (minisign-signed) update — press <kbd>F2</kbd> or use **Settings → Check for
 updates**.
+
+## Comparison
+
+By using the system's native WebView through Tauri instead of bundling a full
+browser engine, Carrier stays small and light on system resources:
+
+| | Carrier | Official Messenger Desktop | Caprine |
+| :--- | :---: | :---: | :---: |
+| **Status** | ✅ Active | ❌ Discontinued | ⚠️ Unmaintained |
+| **Engine** | System WebView (Tauri) | Electron | Electron |
+| **Installer size** | ~3 MB | ~100+ MB | ~100 MB |
+| **CPU / RAM usage** | Low | High | High |
+| **Interface** | Chat only, FB chrome stripped | Chat only | Custom UI |
+
+<sub>The Linux <code>.deb</code>/<code>.rpm</code> are ~4 MB; the self-contained
+<code>.AppImage</code> is larger only because it bundles WebKitGTK that the
+<code>.deb</code>/<code>.rpm</code> take from the system.</sub>
 
 ## Disclaimer
 
