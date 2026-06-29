@@ -561,8 +561,11 @@ dependencies = [
 name = "carrier"
 version = "1.0.0"
 dependencies = [
+ "base64 0.22.1",
  "block2",
  "dark-light",
+ "mac-notification-sys",
+ "notify-rust",
  "objc2",
  "objc2-foundation",
  "objc2-user-notifications",

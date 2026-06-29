@@ -6,9 +6,11 @@
 //! native notifications, theme sync, and tracking-redirect-free external links.
 //! Anything that isn't Messenger is handed to the user's default browser.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, MenuItemBuilder, SubmenuBuilder},
@@ -1251,6 +1253,157 @@ fn init_script(settings: &Settings) -> String {
     )
 }
 
+// ---------------------------------------------------------------------------
+// New-message notifications
+// ---------------------------------------------------------------------------
+
+/// A new-message notification request from the page (the `carrier:notify` event).
+/// Facebook hands its in-page `Notification` the sender (`title`), the message
+/// preview (`body`), and the sender's avatar URL; the injected bridge forwards
+/// them here, rendering the avatar to a PNG data URL (`icon`, best-effort) so the
+/// native side never has to re-fetch it. `id` is the page's handle for this
+/// notification — echoed back on click so the page can open the conversation.
+#[derive(Debug, Default, Deserialize)]
+struct NotifyMsg {
+    #[serde(default)]
+    id: u64,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    icon: String,
+}
+
+/// Unique-name counter for avatar temp files (see [`avatar_to_temp_png`]).
+static AVATAR_SEQ: AtomicUsize = AtomicUsize::new(0);
+
+/// Decode the avatar the page sent as a PNG data URL into a temp file the native
+/// notification can point at. Returns `None` (→ a text-only notification) on any
+/// problem; the avatar is strictly best-effort.
+fn avatar_to_temp_png(data_url: &str) -> Option<PathBuf> {
+    // `carrier:notify` crosses from the remote page, so validate the shape
+    // before decoding or writing: require a base64 `data:image/...` URL (what
+    // our injected bridge builds from a 64×64 canvas) and bound the size.
+    let payload = data_url.strip_prefix("data:image/")?;
+    let b64 = payload.split_once(";base64,").map(|(_, b)| b)?.trim();
+    // A 64×64 PNG is a few KB; cap far below this ceiling but well above any
+    // legitimate avatar, and reject before decoding so an oversized payload
+    // can't force a large allocation (base64 inflates the byte count by ~4/3).
+    const MAX_AVATAR_BYTES: usize = 1 << 20; // 1 MiB decoded
+    if b64.len() > MAX_AVATAR_BYTES / 3 * 4 + 4 {
+        return None;
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    if bytes.is_empty() || bytes.len() > MAX_AVATAR_BYTES {
+        return None;
+    }
+    let dir = std::env::temp_dir().join("carrier-avatars");
+    std::fs::create_dir_all(&dir).ok()?;
+    // A unique name per notification avoids any race between writing the file
+    // here and the OS reading it when the notification is shown.
+    let seq = AVATAR_SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = dir.join(format!("{seq}.png"));
+    std::fs::write(&path, &bytes).ok()?;
+    Some(path)
+}
+
+/// Best-effort cleanup of avatar temp files left by previous runs, so the temp
+/// directory doesn't grow without bound. Called once at startup.
+fn clear_avatar_cache() {
+    let dir = std::env::temp_dir().join("carrier-avatars");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Show a native OS notification for a new message and, if it's clicked, bring
+/// Carrier forward and open the conversation. The avatar is attached where the
+/// platform allows (a thumbnail on macOS — the app icon always owns the main
+/// slot there — and the notification icon on Linux/Windows). Each notification
+/// gets its own thread that blocks until the user clicks or dismisses it; the
+/// thread only parks (it doesn't spin), and on click it routes back to the page.
+fn show_message_notification(app: tauri::AppHandle, msg: NotifyMsg) {
+    let title = if msg.title.trim().is_empty() {
+        "Messenger".to_string()
+    } else {
+        msg.title
+    };
+    let body = msg.body;
+    let id = msg.id;
+    let image = avatar_to_temp_png(&msg.icon);
+    std::thread::spawn(move || {
+        let clicked = show_native_notification(&title, &body, image.as_deref());
+        // The notification has been shown and dismissed/clicked, so the OS is
+        // done with the avatar file — delete it now rather than leaving it for
+        // the next startup's clear_avatar_cache().
+        if let Some(path) = image.as_deref() {
+            let _ = std::fs::remove_file(path);
+        }
+        if clicked {
+            on_notification_click(app, id);
+        }
+    });
+}
+
+/// Show the notification and block until the user interacts with it; returns
+/// `true` if they clicked it (as opposed to dismissing it).
+///
+/// macOS uses mac-notification-sys directly: notify-rust only reports a click
+/// when the notification carries an action button, whereas `wait_for_click`
+/// reports a plain body click and `content_image` carries the avatar.
+#[cfg(target_os = "macos")]
+fn show_native_notification(title: &str, body: &str, image: Option<&std::path::Path>) -> bool {
+    let mut n = mac_notification_sys::Notification::default();
+    n.title(title).message(body).wait_for_click(true);
+    if let Some(path) = image.and_then(|p| p.to_str()) {
+        n.content_image(path);
+    }
+    matches!(
+        n.send(),
+        Ok(mac_notification_sys::NotificationResponse::Click)
+    )
+}
+
+/// See the macOS variant. On Linux/Windows notify-rust's `wait_for_action`
+/// blocks until the notification closes; a freedesktop notification needs an
+/// explicit `default` action for a body click to be reported (it shows no
+/// button), which Windows toasts don't.
+#[cfg(not(target_os = "macos"))]
+fn show_native_notification(title: &str, body: &str, image: Option<&std::path::Path>) -> bool {
+    let mut n = notify_rust::Notification::new();
+    n.summary(title);
+    if !body.is_empty() {
+        n.body(body);
+    }
+    if let Some(path) = image.and_then(|p| p.to_str()) {
+        n.icon(path);
+    }
+    #[cfg(unix)]
+    n.action("default", "Open");
+    let mut clicked = false;
+    if let Ok(handle) = n.show() {
+        handle.wait_for_action(|action| {
+            // notify-rust reports `__closed` for a dismissal; anything else is an
+            // activation (the body or our `default`/`Open` action).
+            clicked = action != "__closed";
+        });
+    }
+    clicked
+}
+
+/// A notification was clicked: surface Carrier's window and ask the page to open
+/// the conversation (it invokes Facebook's own `onclick` for that notification,
+/// keyed by `id`). Hops to the main thread for the window + webview calls.
+fn on_notification_click(app: tauri::AppHandle, id: u64) {
+    let _ = app.clone().run_on_main_thread(move || {
+        show_main(&app);
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.eval(format!(
+                "window.__carrierNotifyClick && window.__carrierNotifyClick({id});"
+            ));
+        }
+    });
+}
+
 pub fn run() {
     let initial = load_settings_early();
 
@@ -1367,6 +1520,30 @@ pub fn run() {
                         APP_TITLE.to_string()
                     };
                     let _ = tray.set_tooltip(Some(&tip));
+                }
+            });
+
+            // New-message notifications: the page's `Notification` bridge sends
+            // sender/preview/avatar here; we render them natively (with the
+            // avatar), notify you while Carrier is in the background, and open the
+            // conversation on click. See `show_message_notification`.
+            clear_avatar_cache();
+            #[cfg(target_os = "macos")]
+            {
+                // macOS shows notifications under a registered bundle id; mirror
+                // the notification plugin's choice (a real bundle in release,
+                // Terminal's in dev where ours isn't signed).
+                let id = app.config().identifier.clone();
+                let _ = mac_notification_sys::set_application(if tauri::is_dev() {
+                    "com.apple.Terminal"
+                } else {
+                    &id
+                });
+            }
+            let notify_handle = app.handle().clone();
+            app.listen_any("carrier:notify", move |event| {
+                if let Ok(msg) = serde_json::from_str::<NotifyMsg>(event.payload()) {
+                    show_message_notification(notify_handle.clone(), msg);
                 }
             });
 
@@ -1735,5 +1912,56 @@ mod tests {
         // A trailing lone '%' or short sequence must not panic.
         assert_eq!(percent_decode("abc%"), "abc%");
         assert_eq!(percent_decode("abc%2"), "abc%2");
+    }
+
+    #[test]
+    fn avatar_data_url_is_decoded_to_a_temp_png() {
+        // "aGVsbG8=" is base64 for "hello"; the helper only base64-decodes the
+        // bytes after the comma (it doesn't validate PNG structure) and writes
+        // them out, so we can assert the exact contents round-trip.
+        let path = avatar_to_temp_png("data:image/png;base64,aGVsbG8=")
+            .expect("a well-formed data URL decodes to a file");
+        let written = std::fs::read(&path).expect("temp avatar file exists");
+        assert_eq!(written, b"hello");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn notify_msg_parses_the_page_payload() {
+        // The shape the injected bridge emits on `carrier:notify`.
+        let msg: NotifyMsg = serde_json::from_str(
+            r#"{"id":7,"title":"Jane","body":"hi there","icon":"data:image/png;base64,aGk="}"#,
+        )
+        .expect("payload parses");
+        assert_eq!(msg.id, 7);
+        assert_eq!(msg.title, "Jane");
+        assert_eq!(msg.body, "hi there");
+        // Missing fields fall back to defaults rather than failing the parse.
+        let bare: NotifyMsg = serde_json::from_str("{}").expect("empty object parses");
+        assert_eq!(bare.id, 0);
+        assert!(bare.title.is_empty());
+    }
+
+    #[test]
+    fn avatar_decode_rejects_malformed_input() {
+        // Not a data URL at all.
+        assert!(avatar_to_temp_png("").is_none());
+        assert!(avatar_to_temp_png("https://example.com/a.png").is_none());
+        // A data URL, but not an image media type.
+        assert!(avatar_to_temp_png("data:text/plain;base64,aGVsbG8=").is_none());
+        // Image, but not base64-encoded (no `;base64,` marker).
+        assert!(avatar_to_temp_png("data:image/png,aGVsbG8=").is_none());
+        // Present but empty payload → nothing to attach.
+        assert!(avatar_to_temp_png("data:image/png;base64,").is_none());
+        // Garbage that isn't valid base64.
+        assert!(avatar_to_temp_png("data:image/png;base64,!!not-base64!!").is_none());
+    }
+
+    #[test]
+    fn avatar_decode_rejects_oversized_payload() {
+        // A base64 body far larger than any real 64×64 avatar is rejected
+        // before it's decoded, so a hostile page can't force a huge write.
+        let huge = format!("data:image/png;base64,{}", "A".repeat(4 << 20));
+        assert!(avatar_to_temp_png(&huge).is_none());
     }
 }

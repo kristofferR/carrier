@@ -30,6 +30,13 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-window-state = "2"
 tauri-plugin-log = "2"
+# New-message notifications are built natively (not via the notification plugin)
+# so the sender's avatar survives: the plugin drops images on desktop, whereas
+# notify-rust attaches them (a thumbnail on macOS, the icon on Linux/Windows).
+# notify-rust is already in the tree via tauri-plugin-notification, so it adds no
+# build cost. `base64` decodes the avatar the page hands us as a PNG data URL.
+notify-rust = "4"
+base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
@@ -50,6 +57,11 @@ block2 = "0.6.2"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSValue"] }
 objc2-user-notifications = { version = "0.3.2", features = ["UNUserNotificationCenter", "UNNotificationSettings", "block2"] }
+# Click-to-open notifications on macOS: notify-rust only delivers a body click
+# when the notification carries a button, so we drive mac-notification-sys
+# directly (its `wait_for_click` reports a plain body click, and `content_image`
+# carries the avatar). Already in the tree via notify-rust, so no extra build.
+mac-notification-sys = "0.6"
 
 [profile.release]
 panic = "abort"

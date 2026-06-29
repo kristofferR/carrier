@@ -79,8 +79,6 @@
   // features route through plugins, matching how the upstream app works.
   const openUrl = (url) =>
     invoke("plugin:opener|open_url", { url, with: null })?.catch?.(() => {});
-  const notify = (options) =>
-    invoke("plugin:notification|notify", { options })?.catch?.(() => {});
 
   // Expose zoom controls so the native menu (View ▸ Zoom) can drive them.
   window.__carrierZoomIn = zoomIn;
@@ -321,15 +319,101 @@
   // messages notify you even when Carrier is in the background.
   (function notificationBridge() {
     if (!window.__TAURI_INTERNALS__) return;
-    // Make sure the OS has actually granted Carrier notification permission,
-    // otherwise plugin:notification|notify silently no-ops.
+    // Keep the page convinced notifications are granted (below) so Facebook keeps
+    // firing them; this also flips on the OS-level grant the native side needs.
     invoke("plugin:notification|is_permission_granted")
       ?.then?.((granted) => granted || invoke("plugin:notification|request_permission"))
       ?.catch?.(() => {});
-    function CarrierNotification(title, options = {}) {
+
+    // Render the sender's avatar — Facebook puts its (remote fbcdn) URL on the
+    // Notification's `icon` — to a small PNG data URL, so the native side can
+    // attach it without re-fetching: the page already holds Facebook's session
+    // and the cached image. Best-effort; resolves to "" if the image can't be
+    // read (e.g. the canvas is tainted) and the notification then shows text only.
+    const avatarToDataUrl = (url) =>
+      new Promise((resolve) => {
+        if (!url) return resolve("");
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        let settled = false;
+        const done = (v) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(v);
+        };
+        const timer = setTimeout(() => done(""), 2500);
+        img.onload = () => {
+          try {
+            const size = 64;
+            const c = document.createElement("canvas");
+            c.width = size;
+            c.height = size;
+            c.getContext("2d").drawImage(img, 0, 0, size, size);
+            done(c.toDataURL("image/png"));
+          } catch (_) {
+            done("");
+          }
+        };
+        img.onerror = () => done("");
+        img.src = url;
+      });
+
+    // Clicking a native notification routes back here by id: bring the
+    // conversation up by invoking the original `onclick` Facebook assigned to its
+    // Notification (that's what opens the right thread). A small bounded map keeps
+    // those handlers alive between "notification shown" and "notification clicked".
+    let notifySeq = 0;
+    const notifyHandlers = new Map();
+    window.__carrierNotifyClick = (id) => {
+      const n = notifyHandlers.get(id);
+      if (!n) return;
+      notifyHandlers.delete(id);
       try {
-        notify({ title: String(title || "Messenger"), body: String(options.body || "") });
+        window.focus();
       } catch (_) {}
+      try {
+        // Facebook's onclick expects the click Event (it can read it / call
+        // preventDefault); a native notification click carries no DOM event, so
+        // hand it a synthetic one. Called as `n.onclick(...)` so `this` stays
+        // bound to the Notification instance.
+        n.onclick?.(new Event("click"));
+      } catch (_) {}
+    };
+
+    function CarrierNotification(title, options = {}) {
+      const opts = options || {};
+      // Only notify when Carrier is in the background — don't interrupt you with
+      // a notification for a conversation you're actively reading.
+      if (!document.hasFocus()) {
+        const id = ++notifySeq;
+        // Facebook assigns `this.onclick` right after construction; hold onto
+        // this instance so the click route can call it. Cap the map so a long
+        // session of unclicked notifications can't grow it without bound.
+        notifyHandlers.set(id, this);
+        if (notifyHandlers.size > 50)
+          notifyHandlers.delete(notifyHandlers.keys().next().value);
+        avatarToDataUrl(opts.icon).then((icon) => {
+          // avatarToDataUrl is async (it decodes the image, up to ~2.5s), so
+          // you may have returned to Carrier by the time it resolves — re-check
+          // before emitting so we don't pop a notification for a conversation
+          // you're now looking at. Drop the stored click handler too, since no
+          // notification will reference it.
+          if (document.hasFocus()) {
+            notifyHandlers.delete(id);
+            return;
+          }
+          invoke("plugin:event|emit", {
+            event: "carrier:notify",
+            payload: {
+              id,
+              title: String(title || "Messenger"),
+              body: String(opts.body || ""),
+              icon,
+            },
+          })?.catch?.(() => {});
+        });
+      }
       // Nudge the auto-refresh so the conversation view catches up even when
       // Facebook's in-WebView live sync stalls.
       try {
