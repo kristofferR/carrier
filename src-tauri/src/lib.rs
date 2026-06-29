@@ -1283,10 +1283,10 @@ static AVATAR_SEQ: AtomicUsize = AtomicUsize::new(0);
 /// problem; the avatar is strictly best-effort.
 fn avatar_to_temp_png(data_url: &str) -> Option<PathBuf> {
     // `carrier:notify` crosses from the remote page, so validate the shape
-    // before decoding or writing: require a base64 `data:image/...` URL (what
-    // our injected bridge builds from a 64×64 canvas) and bound the size.
-    let payload = data_url.strip_prefix("data:image/")?;
-    let b64 = payload.split_once(";base64,").map(|(_, b)| b)?.trim();
+    // before decoding or writing. Our injected bridge always builds the avatar
+    // with `canvas.toDataURL("image/png")`, so require exactly a base64 PNG data
+    // URL rather than trusting an arbitrary `image/*` type from the page.
+    let b64 = data_url.strip_prefix("data:image/png;base64,")?.trim();
     // A 64×64 PNG is a few KB; cap far below this ceiling but well above any
     // legitimate avatar, and reject before decoding so an oversized payload
     // can't force a large allocation (base64 inflates the byte count by ~4/3).
@@ -1295,10 +1295,16 @@ fn avatar_to_temp_png(data_url: &str) -> Option<PathBuf> {
         return None;
     }
     let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
-    if bytes.is_empty() || bytes.len() > MAX_AVATAR_BYTES {
+    // The decoded bytes are untrusted (remote page) and we name the file `.png`,
+    // so confirm they actually begin with the PNG magic header and stay in
+    // bounds before writing anything to disk.
+    const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
+    if bytes.len() > MAX_AVATAR_BYTES || !bytes.starts_with(PNG_MAGIC) {
         return None;
     }
-    let dir = std::env::temp_dir().join("carrier-avatars");
+    // A per-process directory keeps `multi_instance` runs from colliding on
+    // temp-file names or deleting each other's in-flight avatars.
+    let dir = avatar_cache_dir();
     std::fs::create_dir_all(&dir).ok()?;
     // A unique name per notification avoids any race between writing the file
     // here and the OS reading it when the notification is shown.
@@ -1308,11 +1314,33 @@ fn avatar_to_temp_png(data_url: &str) -> Option<PathBuf> {
     Some(path)
 }
 
-/// Best-effort cleanup of avatar temp files left by previous runs, so the temp
-/// directory doesn't grow without bound. Called once at startup.
+/// This process's private avatar-cache directory. Keying it on the PID keeps
+/// concurrent `multi_instance` runs from colliding on temp-file names or wiping
+/// each other's in-flight avatars (see [`clear_avatar_cache`]).
+fn avatar_cache_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("carrier-avatars-{}", std::process::id()))
+}
+
+/// Best-effort cleanup of avatar temp files, so the temp directory doesn't grow
+/// without bound. Called once at startup. Removes this process's own directory
+/// (e.g. leftovers from a previously crashed run that reused the PID) and sweeps
+/// *empty* sibling directories left by cleanly-exited runs — but never a
+/// non-empty one, which could belong to another live instance mid-notification.
 fn clear_avatar_cache() {
-    let dir = std::env::temp_dir().join("carrier-avatars");
-    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(avatar_cache_dir());
+    if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+        for entry in entries.flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("carrier-avatars-")
+            {
+                // `remove_dir` only succeeds on an empty directory, so a live
+                // instance's avatars are never deleted out from under it.
+                let _ = std::fs::remove_dir(entry.path());
+            }
+        }
+    }
 }
 
 /// Show a native OS notification for a new message and, if it's clicked, bring
@@ -1916,13 +1944,14 @@ mod tests {
 
     #[test]
     fn avatar_data_url_is_decoded_to_a_temp_png() {
-        // "aGVsbG8=" is base64 for "hello"; the helper only base64-decodes the
-        // bytes after the comma (it doesn't validate PNG structure) and writes
-        // them out, so we can assert the exact contents round-trip.
-        let path = avatar_to_temp_png("data:image/png;base64,aGVsbG8=")
-            .expect("a well-formed data URL decodes to a file");
+        // "iVBORw0KGgo=" is base64 for the 8-byte PNG magic header; the helper
+        // requires real PNG bytes (it checks the magic header) before writing
+        // the file, so we can assert the exact contents round-trip.
+        let png_magic: &[u8] = b"\x89PNG\r\n\x1a\n";
+        let path = avatar_to_temp_png("data:image/png;base64,iVBORw0KGgo=")
+            .expect("a well-formed PNG data URL decodes to a file");
         let written = std::fs::read(&path).expect("temp avatar file exists");
-        assert_eq!(written, b"hello");
+        assert_eq!(written, png_magic);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1955,6 +1984,10 @@ mod tests {
         assert!(avatar_to_temp_png("data:image/png;base64,").is_none());
         // Garbage that isn't valid base64.
         assert!(avatar_to_temp_png("data:image/png;base64,!!not-base64!!").is_none());
+        // Valid base64, but the decoded bytes aren't a PNG (no magic header).
+        assert!(avatar_to_temp_png("data:image/png;base64,aGVsbG8=").is_none());
+        // Real PNG bytes, but a non-PNG image subtype is rejected at the prefix.
+        assert!(avatar_to_temp_png("data:image/jpeg;base64,iVBORw0KGgo=").is_none());
     }
 
     #[test]
