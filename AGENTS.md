@@ -63,8 +63,9 @@ On `main` (committed `d8a25a6`).
   executables), updater.
 - **`src-tauri/inject/`** — injected at document-start: `messenger.css` (hides FB
   chrome + theme/compact/login CSS), `messenger.js` (shortcuts, zoom, image
-  viewer, notifications, unread badge, force-theme, login tidy), `panel.js`
-  (toast, settings/update bridge).
+  viewer, notifications incl. mute / hide-preview privacy, unread badge,
+  force-theme, hide names & avatars, login tidy), `panel.js` (toast,
+  settings/update bridge).
 - **`dist/settings.html`** — the standalone Settings window.
 - **IPC model (important):** the FB page is a **remote origin**, so it **cannot
   call Carrier's own commands**. Page→backend goes through Tauri **plugins**
