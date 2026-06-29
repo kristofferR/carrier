@@ -136,8 +136,10 @@ jobs:
           xcrun stapler staple "${SRC}"
           DEST="Carrier_${GITHUB_REF_NAME#v}_${ASSET_PLATFORM}_${ASSET_ARCH}.dmg"
           cp "${SRC}" "${DEST}"
-          # Use the built-in $GITHUB_REF_NAME env var, not a ${{ }} template
-          # expansion: a crafted tag name could otherwise inject shell code here.
+          # Use the built-in $GITHUB_REF_NAME env var, not a GitHub Actions
+          # template expansion: a crafted tag name could otherwise inject shell
+          # code here. (Don't write a literal Actions expression in this comment:
+          # it would be interpolated and an empty one fails the whole workflow.)
           gh release upload "$GITHUB_REF_NAME" "${DEST}" --clobber
 
       # A no-installer option for Windows: just the standalone .exe (WebView2 is
@@ -181,8 +183,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Built-in env vars, not ${{ }} expansion — keeps a crafted tag name
-          # from injecting shell code into this run script.
+          # Built-in env vars, not a GitHub Actions template expansion — keeps a
+          # crafted tag name from injecting shell code into this run script.
+          # (No literal Actions expression in this comment: it would be
+          # interpolated, and an empty one fails the whole workflow.)
           ids=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" \
             --jq '.assets[] | select(.name | endswith(".sig")) | .id')
           for id in $ids; do
