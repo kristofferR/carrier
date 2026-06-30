@@ -431,11 +431,11 @@
     function CarrierNotification(title, options = {}) {
       const opts = options || {};
       const s = window.__CARRIER_SETTINGS__ || {};
-      // Only notify when Carrier is in the background — don't interrupt you with
-      // a notification for a conversation you're actively reading — and never
-      // while notifications are muted. (The auto-refresh nudge below still runs
-      // when muted so a backgrounded window keeps catching up.)
-      if (!s.mute_notifications && !document.hasFocus()) {
+      // Surface every new-message notification Facebook fires — even while
+      // Carrier is focused (the native side presents it as a banner regardless of
+      // focus) — unless notifications are muted. (The auto-refresh nudge below
+      // still runs when muted so the window keeps catching up.)
+      if (!s.mute_notifications) {
         const id = ++notifySeq;
         // Facebook assigns `this.onclick` right after construction; hold onto
         // this instance so the click route can call it. Cap the map so a long
@@ -447,15 +447,6 @@
         // notification, and skip the avatar so the sender's face never leaks.
         const hidePreview = s.hide_notification_preview;
         avatarToDataUrl(hidePreview ? "" : opts.icon).then((icon) => {
-          // avatarToDataUrl is async (it decodes the image, up to ~2.5s), so
-          // you may have returned to Carrier by the time it resolves — re-check
-          // before emitting so we don't pop a notification for a conversation
-          // you're now looking at. Drop the stored click handler too, since no
-          // notification will reference it.
-          if (document.hasFocus()) {
-            notifyHandlers.delete(id);
-            return;
-          }
           invoke("plugin:event|emit", {
             event: "carrier:notify",
             payload: {

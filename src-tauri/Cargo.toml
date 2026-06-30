@@ -55,12 +55,17 @@ tauri-plugin-mcp = { git = "https://github.com/P3GLEG/tauri-plugin-mcp", optiona
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSValue"] }
-objc2-user-notifications = { version = "0.3.2", features = ["UNUserNotificationCenter", "UNNotificationSettings", "block2"] }
-# Click-to-open notifications on macOS: notify-rust only delivers a body click
-# when the notification carries a button, so we drive mac-notification-sys
-# directly (its `wait_for_click` reports a plain body click, and `content_image`
-# carries the avatar). Already in the tree via notify-rust, so no extra build.
+objc2-foundation = { version = "0.3", features = ["NSString", "NSValue", "NSObject", "NSDictionary", "NSArray", "NSURL", "NSError"] }
+# Modern notifications on macOS 26/27: the legacy NSUserNotification path
+# (mac-notification-sys / notify-rust) is deprecated and no longer presents
+# banners for third-party apps — the app never even registers in System
+# Settings. We deliver via UNUserNotificationCenter instead (the same move
+# Electron made in v42): build a UNMutableNotificationContent (+ avatar
+# attachment), add the request, and route presentation/click through a
+# UNUserNotificationCenterDelegate.
+objc2-user-notifications = { version = "0.3.2", features = ["UNUserNotificationCenter", "UNNotificationSettings", "UNNotificationContent", "UNNotificationRequest", "UNNotificationAttachment", "UNNotificationSound", "UNNotificationResponse", "UNNotification", "UNNotificationTrigger", "NSString_UserNotifications", "block2"] }
+# Still pulled in transitively via notify-rust (which Linux/Windows use), so it
+# adds no build cost; the macOS notification code no longer references it.
 mac-notification-sys = "0.6"
 
 [profile.release]
