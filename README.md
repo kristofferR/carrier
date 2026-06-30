@@ -20,21 +20,21 @@
 <table align="center">
   <tr>
     <td align="center" width="220">
-      <a href="https://github.com/kristofferR/carrier/releases/download/v1.0.0/Carrier_1.0.0_mac_arm.dmg">
+      <a href="https://github.com/kristofferR/carrier/releases/download/v1.1.0/Carrier_1.1.0_mac_arm.dmg">
         <img src="docs/icons/download.svg" width="56" height="56" alt=""><br>
         <strong>Download for macOS</strong><br>
         <sub>Apple Silicon &middot; .dmg</sub>
       </a>
     </td>
     <td align="center" width="220">
-      <a href="https://github.com/kristofferR/carrier/releases/download/v1.0.0/Carrier_1.0.0_win_x64_setup.exe">
+      <a href="https://github.com/kristofferR/carrier/releases/download/v1.1.0/Carrier_1.1.0_win_x64_setup.exe">
         <img src="docs/icons/download.svg" width="56" height="56" alt=""><br>
         <strong>Download for Windows</strong><br>
         <sub>64-bit installer &middot; .exe</sub>
       </a>
     </td>
     <td align="center" width="220">
-      <a href="https://github.com/kristofferR/carrier/releases/download/v1.0.0/Carrier_1.0.0_lin_x64.AppImage">
+      <a href="https://github.com/kristofferR/carrier/releases/download/v1.1.0/Carrier_1.1.0_lin_x64.AppImage">
         <img src="docs/icons/download.svg" width="56" height="56" alt=""><br>
         <strong>Download for Linux</strong><br>
         <sub>AppImage &middot; x64</sub>
