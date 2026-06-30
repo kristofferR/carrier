@@ -289,6 +289,53 @@
     true,
   );
 
+  // Facebook's image/file viewer "Download" button is an `<a download target="_blank">`
+  // pointing at a blob: URL. On macOS the target="_blank" makes wry load the blob in the
+  // webview (its new-window path drops the `download` attribute), so the file just opens
+  // instead of saving — and a `_blank` activation isn't cancelable from the DOM click,
+  // so intercepting alone doesn't help. Fix it in two steps:
+  //   1. Strip `target` off download anchors as they appear, removing the new-window
+  //      path so a click becomes an ordinary, cancelable in-page activation.
+  //   2. Intercept that click and run downloadSrc() — the same fetch -> untargeted
+  //      anchor -> Rust `on_download` path the working right-click "Download" uses.
+  const stripDlTarget = (a) => {
+    if (a?.matches?.("a[download][target]")) {
+      a.removeAttribute("target");
+      a.removeAttribute("rel");
+    }
+  };
+  const sweepDlAnchors = (root) => {
+    stripDlTarget(root);
+    root.querySelectorAll?.("a[download][target]").forEach(stripDlTarget);
+  };
+  sweepDlAnchors(document.documentElement);
+  new MutationObserver((muts) => {
+    for (const m of muts) {
+      if (m.type === "attributes") stripDlTarget(m.target);
+      else for (const n of m.addedNodes) if (n.nodeType === 1) sweepDlAnchors(n);
+    }
+  }).observe(document.documentElement, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ["target", "download"],
+  });
+  document.addEventListener(
+    "click",
+    (e) => {
+      const a = e.target?.closest?.("a[download]");
+      const href = a?.href;
+      if (!href || !/^(blob:|data:|https?:)/i.test(href)) return;
+      a.removeAttribute("target");
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      downloadSrc(href, a.getAttribute("download") || "download")
+        .then(() => toast("Saved to Downloads"))
+        .catch(() => toast("Download failed"));
+    },
+    true,
+  );
+
   /* ----------------------------- Spell check ---------------------------- */
   const SPELL_SEL = '[contenteditable="true"], textarea, input[type="text"], input[type="search"]';
   function applySpellcheckNow() {
