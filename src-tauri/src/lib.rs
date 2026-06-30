@@ -268,16 +268,24 @@ fn clear_pending_webview_data(app: &tauri::AppHandle) {
         return;
     }
 
-    if let Err(e) = std::fs::remove_file(&marker) {
-        eprintln!("carrier: failed to remove clear-cache marker: {e}");
-    }
-
+    let mut all_removed = true;
     for path in webview_data_paths(app) {
         if let Err(e) = remove_path_if_exists(&path) {
+            all_removed = false;
             eprintln!(
                 "carrier: failed to remove webview data path {}: {e}",
                 path.display()
             );
+        }
+    }
+
+    // Only clear the retry marker once every data path is actually gone. If any
+    // removal failed, keep the marker so the next launch retries — otherwise a
+    // single failure would silently abandon the "clear cache" request and leave
+    // cookies/cache behind.
+    if all_removed {
+        if let Err(e) = std::fs::remove_file(&marker) {
+            eprintln!("carrier: failed to remove clear-cache marker: {e}");
         }
     }
 }
