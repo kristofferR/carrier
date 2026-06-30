@@ -163,6 +163,10 @@ jobs:
 
       - name: Upload Windows portable zip
         if: contains(matrix.target, 'pc-windows')
+        # Bash (Git Bash on the Windows runner), not the Windows default of
+        # PowerShell — the command below uses `$VAR` env-var refs, which PowerShell
+        # leaves empty, so the upload ran as `gh release upload "" ""` and failed.
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # Reference the tag/asset via shell env vars rather than ${{ }} expansion
