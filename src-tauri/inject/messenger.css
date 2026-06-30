@@ -59,18 +59,121 @@ div[role="dialog"][aria-label] {
   display: none !important;
 }
 
+/* Collapse Facebook's wide multi-column login layout down to the window width,
+   so there's no horizontal overflow. Overflow is what pushed the "centred" card
+   off to one side (it read as extra left padding) after a window resize or a
+   language change — Facebook keeps a layout viewport wider than the native
+   window, and `position: fixed` / `vw`-based centring is measured against that
+   wider box (and is thrown off entirely by transforms on FB's own wrappers).
+   messenger.js marks every wrapper between <body> and the login column with
+   data-carrier-login-anc; flattening them to plain full-width blocks lets the
+   column centre with a simple auto margin and no viewport math at all. */
+html[data-carrier-login],
+html[data-carrier-login] body,
+html[data-carrier-login] [data-carrier-login-anc] {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  float: none !important;
+  overflow-x: hidden !important;
+}
+
+html[data-carrier-login] body {
+  display: block !important;
+  min-height: 100vh !important;
+  padding: 24px 20px 96px !important;
+  box-sizing: border-box !important;
+}
+
+html[data-carrier-login] [data-carrier-login-anc] {
+  display: block !important;
+  position: static !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  transform: none !important;
+}
+
+/* The login column: a normal-flow block, centred and capped to a comfortable
+   width. Everything inside it (card, form, fields, and the show/hide-password
+   toggle) keeps Facebook's own layout — we deliberately do NOT force widths on
+   form internals, which is what displaced the password toggle over the typed
+   text and clipped the field labels. */
 html[data-carrier-login] [data-carrier-login-col] {
+  display: block !important;
+  position: static !important;
+  float: none !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 400px !important;
+  margin: 0 auto !important;
+  box-sizing: border-box !important;
+}
+
+html[data-carrier-login] [data-carrier-login-card],
+html[data-carrier-login] [data-carrier-login-form] {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
   margin-left: auto !important;
   margin-right: auto !important;
   float: none !important;
-  max-width: 420px !important;
+  box-sizing: border-box !important;
 }
 
-/* Centre the remaining login column within whatever container is left. */
-html[data-carrier-login] body {
+/* Contain the form's contents to the column width. Facebook's inputs and rows
+   carry intrinsic min-widths that otherwise overflow the column to the right
+   (which looked like the form was shoved off-centre with left padding). We only
+   *cap* the width here — we do NOT force width:100% on every element, because
+   that stretched the show/hide-password toggle across the field and hid the
+   typed text. The inputs keep Facebook's own full-width styling. */
+html[data-carrier-login] [data-carrier-login-col] form,
+html[data-carrier-login] [data-carrier-login-col] form div,
+html[data-carrier-login] [data-carrier-login-col] form span,
+html[data-carrier-login] [data-carrier-login-col] form label,
+html[data-carrier-login] [data-carrier-login-col] input,
+html[data-carrier-login] [data-carrier-login-col] button,
+html[data-carrier-login] [data-carrier-login-col] [role="button"],
+html[data-carrier-login] [data-carrier-login-col] a[role="link"] {
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+}
+
+/* Footer: keep only the language switcher, pinned across the bottom; the JS
+   marks the language strip and the marketing links separately. */
+html[data-carrier-login] [data-carrier-login-footer],
+html[data-carrier-login] [data-carrier-login-footer-keep] {
+  display: contents !important;
+}
+
+html[data-carrier-login] [data-carrier-login-languages] {
+  position: fixed !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  z-index: 2147483646 !important;
   display: flex !important;
-  align-items: flex-start !important;
+  flex-wrap: wrap !important;
   justify-content: center !important;
+  align-items: center !important;
+  gap: 6px 18px !important;
+  box-sizing: border-box !important;
+  padding: 8px 20px 16px !important;
+  margin: 0 !important;
+  list-style: none !important;
+  text-align: center !important;
+}
+
+html[data-carrier-login] [data-carrier-login-languages] > * {
+  display: inline-flex !important;
+  align-items: center !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  float: none !important;
+}
+
+html[data-carrier-login] [data-carrier-login-footer-links] {
+  display: none !important;
 }
 
 /* Dark mode on the login page is handled by swapping Facebook's own theme
@@ -85,11 +188,38 @@ html[data-carrier-darkswap] body {
   background-color: #18191a !important;
 }
 
-/* The login card's ancestor wrappers often carry a white background; clear it
-   so the dark page shows through around the centred card. */
-html[data-carrier-darkswap] [data-carrier-login-anc] {
+html[data-carrier-login][data-carrier-darkswap] body > div {
   background-color: transparent !important;
   background-image: none !important;
+}
+
+/* The login card and its ancestor wrappers often carry a white background; clear
+   it so the dark page shows through seamlessly around the centred card. The
+   logo/title band inside the card is cleared from JS (it's too small for the
+   ancestor walk to catch at narrow widths). */
+html[data-carrier-darkswap] [data-carrier-login-anc],
+html[data-carrier-login][data-carrier-darkswap] [data-carrier-login-col],
+html[data-carrier-login][data-carrier-darkswap] [data-carrier-login-card],
+html[data-carrier-login][data-carrier-darkswap] [data-carrier-login-form] {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+/* Facebook's logged-out auth interstitials (verify-with-provider / checkpoint /
+   2FA, e.g. /auth_platform/…) sit on Facebook's dark background but render their
+   body copy in near-black, so it's unreadable. We can't safely flip Facebook's
+   own theme class (it breaks Comet's hydration), so instead force the text to a
+   light colour. `data-carrier-authtext` is set on <html> by messenger.js purely
+   from the URL path. Gated on `.__fb-dark-mode` (Facebook's own dark-theme class)
+   so it ONLY lightens text when the page is actually dark — in light mode the
+   rule doesn't apply and Facebook's normal black-on-white stays intact. The whole
+   interstitial is dark when this matches, so lightening every text node is safe;
+   the blue action button keeps light-enough text and stays legible. */
+html.__fb-dark-mode[data-carrier-authtext] body :is(span, div, p, h1, h2, h3, h4, label, li, strong, b) {
+  color: #e4e6eb !important;
+}
+html.__fb-dark-mode[data-carrier-authtext] body a {
+  color: #4599ff !important;
 }
 
 /* ----------------------- Hide names & avatars --------------------------- */

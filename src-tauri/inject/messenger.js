@@ -748,6 +748,179 @@
     };
   })();
 
+  /* ------------------ Facebook optional-cookie refusal ------------------ */
+  const onFacebookHost = () => /(^|\.)facebook\.com$/i.test(location.hostname);
+  const onFacebookLoginSurface = () =>
+    onFacebookHost() &&
+    (/\/login(?:\.php)?$/i.test(location.pathname) ||
+      location.pathname === "/" ||
+      !!document.querySelector('input[name="email"], input[name="pass"], input[type="password"]'));
+
+  const visibleBox = (el) => {
+    if (!el || el.nodeType !== 1) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return null;
+    const s = getComputedStyle(el);
+    if (s.display === "none" || s.visibility === "hidden") return null;
+    return r;
+  };
+
+  const rgb = (color) => {
+    const m = color && color.match(/rgba?\(([^)]+)\)/);
+    if (!m) return null;
+    const [r, g, b, a = 1] = m[1].split(",").map((v) => parseFloat(v));
+    return Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b) ? { r, g, b, a } : null;
+  };
+
+  const primaryBlueScore = (el) => {
+    let best = 0;
+    for (let cur = el; cur && cur !== document.documentElement; cur = cur.parentElement) {
+      const c = rgb(getComputedStyle(cur).backgroundColor);
+      if (!c || c.a < 0.35) continue;
+      best = Math.max(best, c.b - Math.max(c.r, c.g) + Math.max(0, c.b - 120));
+      if (c.a > 0.9) break;
+    }
+    return best;
+  };
+
+  const actionButtonsIn = (root) => {
+    const selector = 'button, [role="button"]';
+    const buttons = [];
+    if (root.matches?.(selector)) buttons.push(root);
+    buttons.push(...root.querySelectorAll?.(selector) || []);
+    return buttons.filter((button) => {
+      if (button.closest('[aria-hidden="true"]')) return false;
+      const r = visibleBox(button);
+      if (!r || r.width < 90 || r.height < 28) return false;
+      if (button.disabled || button.getAttribute("aria-disabled") === "true") return false;
+      if (button.hasAttribute("aria-expanded")) return false;
+      if (button.getAttribute("aria-haspopup")) return false;
+      return true;
+    });
+  };
+
+  const bottomActionRow = (root) => {
+    const rootRect = visibleBox(root);
+    if (!rootRect) return null;
+    const buttons = actionButtonsIn(root)
+      .map((button) => ({ button, rect: button.getBoundingClientRect() }))
+      .sort((a, b) => a.rect.top - b.rect.top);
+    const rows = [];
+    for (const item of buttons) {
+      const center = item.rect.top + item.rect.height / 2;
+      let row = rows.find((candidate) => Math.abs(candidate.center - center) < 24);
+      if (!row) {
+        row = { center, items: [] };
+        rows.push(row);
+      }
+      row.items.push(item);
+      row.center = row.items.reduce((sum, i) => sum + i.rect.top + i.rect.height / 2, 0) / row.items.length;
+    }
+
+    return rows
+      .filter((row) => row.items.length >= 2)
+      .map((row) => ({
+        ...row,
+        bottom: Math.max(...row.items.map((i) => i.rect.bottom)),
+        primaryScore: Math.max(...row.items.map((i) => primaryBlueScore(i.button))),
+      }))
+      .filter((row) => row.primaryScore > 40 || row.items.length === 2)
+      .sort((a, b) => b.bottom - a.bottom)[0]?.items;
+  };
+
+  function findOptionalCookieDeclineButton(root = document) {
+    if (!onFacebookLoginSurface()) return null;
+    const roots = new Set();
+    for (const button of actionButtonsIn(root)) {
+      let node = button.parentElement;
+      for (let depth = 0; node && node !== document.body && depth < 12; depth++, node = node.parentElement) {
+        const row = bottomActionRow(node);
+        if (
+          row?.length === 2 &&
+          !node.querySelector?.('input[name="email"], input[name="pass"], input[type="password"]')
+        ) {
+          roots.add(node);
+        }
+      }
+    }
+
+    const candidates = [...roots].sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return ar.width * ar.height - br.width * br.height;
+    });
+    for (const candidate of candidates) {
+      const row = bottomActionRow(candidate);
+      if (!row) continue;
+      const target = row.reduce((best, item) =>
+        primaryBlueScore(item.button) < primaryBlueScore(best.button) ? item : best,
+      );
+      return target.button;
+    }
+    return null;
+  }
+
+  (function autoDeclineOptionalFacebookCookies() {
+    if (!onFacebookHost()) return;
+    let done = false;
+    let scheduled = false;
+    let retryTimer = 0;
+    const deadline = Date.now() + 60000;
+    let observer;
+
+    const stop = () => {
+      observer?.disconnect();
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = 0;
+      }
+    };
+
+    const decline = (button) => {
+      done = true;
+      document.documentElement.setAttribute("data-carrier-cookie-decline", "attempted");
+      stop();
+      button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      button.click();
+    };
+
+    const scan = () => {
+      scheduled = false;
+      if (done) return;
+      const button = findOptionalCookieDeclineButton();
+      if (button) {
+        decline(button);
+      } else if (Date.now() < deadline && !retryTimer) {
+        retryTimer = window.setTimeout(() => {
+          retryTimer = 0;
+          schedule();
+        }, 250);
+      } else if (Date.now() >= deadline) {
+        stop();
+      }
+    };
+
+    const schedule = () => {
+      if (scheduled || done) return;
+      scheduled = true;
+      requestAnimationFrame(scan);
+    };
+
+    observer = new MutationObserver(schedule);
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["aria-checked", "aria-expanded", "class", "role", "style"],
+    });
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", schedule, { once: true });
+    }
+    window.addEventListener("pageshow", schedule);
+    schedule();
+  })();
+
   /* ----------------------- Login page tidy-up --------------------------- */
   // On the logged-out page, hide Facebook's marketing collage and centre the
   // login box, so the window shows just the login form.
@@ -755,6 +928,14 @@
     const HIDE = "data-carrier-hide";
     const COL = "data-carrier-login-col";
     const ANC = "data-carrier-login-anc";
+    const FORM = "data-carrier-login-form";
+    const CARD = "data-carrier-login-card";
+    const REQUIRED = "data-carrier-login-required";
+    const FOOTER = "data-carrier-login-footer";
+    const FOOTER_KEEP = "data-carrier-login-footer-keep";
+    const FOOTER_LINKS = "data-carrier-login-footer-links";
+    const LANGUAGES = "data-carrier-login-languages";
+    const LANGUAGE_LINK = "data-carrier-login-language-link";
     let scheduled = false;
 
     const prefersDark = () => window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -777,21 +958,176 @@
 
     // Only Facebook's own login page — not the in-app OAuth provider pages
     // (Google/Apple/Microsoft), which also have password fields.
-    const onFacebook = () => /(^|\.)facebook\.com$/i.test(location.hostname);
+    const COOKIE_TEXT_RE =
+      /\b(cookie|cookies)\b|informasjonskapsl|tillat alle informasjonskapsler|avvis valgfrie informasjonskapsler/i;
+    const COOKIE_ACTION_RE =
+      /allow all|reject optional|accept all|decline optional|tillat alle|avvis valgfrie|godta alle|avsl[aå] valgfrie/i;
+
+    const hasCookieConsentText = (el) => {
+      const text = (el.textContent || "").replace(/\s+/g, " ").slice(0, 4000);
+      if (!COOKIE_TEXT_RE.test(text)) return false;
+      return COOKIE_ACTION_RE.test(text) || /privacy|personvern|Meta|Facebook/i.test(text);
+    };
+
+    const hasCookieConsentLabel = (el) => {
+      const ownAria = `${el.getAttribute("aria-label") || ""} ${el.getAttribute("aria-labelledby") || ""}`;
+      if (COOKIE_TEXT_RE.test(ownAria) || COOKIE_ACTION_RE.test(ownAria)) return true;
+
+      const nodes = el.querySelectorAll?.("[aria-label], [aria-labelledby]") || [];
+      for (const node of nodes) {
+        const aria = `${node.getAttribute("aria-label") || ""} ${node.getAttribute("aria-labelledby") || ""}`;
+        if (COOKIE_TEXT_RE.test(aria) || COOKIE_ACTION_RE.test(aria)) return true;
+      }
+      return false;
+    };
+
+    const isRequiredLoginUi = (el) => {
+      if (!el || el.nodeType !== 1) return false;
+      if (el === document.documentElement || el === document.body) return false;
+      const role = el.getAttribute("role");
+      if (role === "dialog" || role === "alertdialog") return true;
+      if (el.querySelector?.('[role="dialog"], [role="alertdialog"]')) return true;
+      if (findOptionalCookieDeclineButton(el)) return true;
+      return hasCookieConsentLabel(el) || hasCookieConsentText(el);
+    };
+
+    const restoreRequiredLoginUi = () => {
+      for (const el of document.querySelectorAll("[" + HIDE + "], [" + REQUIRED + "]")) {
+        if (isRequiredLoginUi(el)) {
+          el.removeAttribute(HIDE);
+          el.setAttribute(REQUIRED, "");
+        } else {
+          el.removeAttribute(REQUIRED);
+        }
+      }
+    };
+
+    const clearFooterMarks = () => {
+      document.querySelectorAll("[" + FOOTER + "]").forEach((el) => el.removeAttribute(FOOTER));
+      document.querySelectorAll("[" + FOOTER_KEEP + "]").forEach((el) => el.removeAttribute(FOOTER_KEEP));
+      document.querySelectorAll("[" + FOOTER_LINKS + "]").forEach((el) => el.removeAttribute(FOOTER_LINKS));
+      document.querySelectorAll("[" + LANGUAGES + "]").forEach((el) => el.removeAttribute(LANGUAGES));
+      document.querySelectorAll("[" + LANGUAGE_LINK + "]").forEach((el) => el.removeAttribute(LANGUAGE_LINK));
+    };
+
+    const FOOTER_NOISE_RE =
+      /registrer|logg inn|messenger|facebook|lite|video|meta(?:\s|$)|instagram|threads|quest|ray-ban|personvern|privacy|cookie|informasjonskaps|annonse|annonsevalg|utviklere|developer|jobber|hjelp|help|betingelser|terms|opplasting/i;
+
+    const isLanguageFooterLink = (link) => {
+      if (link.hasAttribute(LANGUAGE_LINK)) return true;
+      const href = (link.getAttribute("href") || "").trim();
+      return href === "#" || href.endsWith("#");
+    };
+
+    const isFooterNoiseLink = (link) => FOOTER_NOISE_RE.test((link.textContent || "").replace(/\s+/g, " ").trim());
+
+    // Facebook's footer language switcher is a row of locale links whose href is
+    // just "#" (they swap the page locale via JS). Identify them by that — NOT by
+    // on-screen geometry — so detection still works before the strip has been
+    // laid out, and even if a previous pass had hidden it (geometry-based
+    // detection was the bug: it failed on the FDSIntlLocaleSelectorList variant
+    // that has no #pageFooter, then the strip got swept into the hidden chrome).
+    const topLanguageLinks = (links) => {
+      const langs = links.filter((link) => isLanguageFooterLink(link) && !isFooterNoiseLink(link));
+      return langs.length >= 2 ? langs : [];
+    };
+
+    const linksOutside = (root, inner) =>
+      [...(root.querySelectorAll?.("a[href]") || [])].filter((link) => !inner.contains(link));
+
+    const isFooterContainer = (el, inner) => {
+      if (!el?.querySelector) return false;
+      if (el.querySelector("#pageFooter, .localeSelectorList")) return true;
+      const links = linksOutside(el, inner);
+      return links.length >= 6 && (topLanguageLinks(links).length >= 2 || links.filter(isLanguageFooterLink).length >= 2);
+    };
+
+    const commonAncestor = (nodes) => {
+      let root = nodes[0];
+      while (root && !nodes.every((node) => root.contains(node))) root = root.parentElement;
+      return root;
+    };
+
+    // Keep the language switcher visible (pinned across the bottom by CSS) and
+    // exempt it from the chrome-hiding pass. `languageRoot` is the smallest box
+    // holding every locale link; `footer` is the highest ancestor that doesn't
+    // also contain the login column — i.e. the sibling branch the hide pass would
+    // otherwise blank out. Marking that branch FOOTER tells the hide pass to keep
+    // it; the inner chain is FOOTER_KEEP (display:contents) so only the strip
+    // itself paints.
+    const keepLanguageStrip = (col, languageLinks) => {
+      const languageRoot = commonAncestor(languageLinks);
+      if (!languageRoot || languageRoot === document.body || languageRoot.contains(col)) return;
+      let footer = languageRoot;
+      while (footer.parentElement && footer.parentElement !== document.body && !footer.parentElement.contains(col)) {
+        footer = footer.parentElement;
+      }
+      languageLinks.forEach((link) => link.setAttribute(LANGUAGE_LINK, ""));
+      languageRoot.setAttribute(LANGUAGES, "");
+      footer.setAttribute(FOOTER, "");
+      for (let node = footer; node; node = node.parentElement) {
+        node.removeAttribute(HIDE);
+        node.removeAttribute(FOOTER_LINKS);
+        if (node !== footer && node !== languageRoot) node.setAttribute(FOOTER_KEEP, "");
+        if (node === languageRoot) break;
+      }
+    };
+
+    const tidyFooter = (col) => {
+      clearFooterMarks();
+      const allLinks = [...document.querySelectorAll("a[href]")].filter((link) => !col.contains(link));
+      const languageLinks = topLanguageLinks(allLinks);
+      const languageSet = new Set(languageLinks);
+      if (languageLinks.length >= 2) keepLanguageStrip(col, languageLinks);
+
+      // Hide every other footer anchor (Register, privacy, Meta family, app
+      // links, …) and the Meta copyright line — everything but the languages.
+      for (const link of allLinks) {
+        if (languageSet.has(link) || link.hasAttribute(LANGUAGE_LINK)) continue;
+        (link.closest("li") || link).setAttribute(FOOTER_LINKS, "");
+      }
+      for (const el of document.body.querySelectorAll("div, span")) {
+        if (el.contains(col) || col.contains(el)) continue;
+        if (languageLinks.some((link) => el.contains(link))) continue;
+        if (/(\bMeta\s*©|\bMeta\s+\d{4}\b|©\s*\d{4})/i.test(el.textContent || "")) {
+          el.setAttribute(FOOTER_LINKS, "");
+        }
+      }
+    };
 
     function tidy() {
       const html = document.documentElement;
+      // Facebook's logged-out auth interstitials (verify-with-provider /
+      // checkpoint / 2FA) render their body copy in near-black even though the
+      // page is in Facebook's dark theme, leaving it unreadable. Flag them by URL
+      // path so CSS can force the text light. This only sets one of *our* data
+      // attributes — it never touches Facebook's own theme class, which is what
+      // broke Comet's rendering when we tried swapping the theme directly.
+      if (
+        onFacebookHost() &&
+        /^\/(?:auth_platform|checkpoint|two_factor|two_step|authentication|recover|confirmemail|device-based)/i.test(
+          location.pathname,
+        )
+      ) {
+        html.setAttribute("data-carrier-authtext", "");
+      } else {
+        html.removeAttribute("data-carrier-authtext");
+      }
       // The login page has both an identifier and a password field. Checkpoint /
       // re-auth / recovery forms have only a password field, so require both to
       // avoid hiding their required UI.
       const pass = document.querySelector('input[name="pass"]');
-      const isLogin = onFacebook() && !!pass && !!document.querySelector('input[name="email"]');
+      const isLogin = onFacebookHost() && !!pass && !!document.querySelector('input[name="email"]');
       if (!isLogin) {
         if (html.hasAttribute("data-carrier-login")) {
           html.removeAttribute("data-carrier-login");
           document.querySelectorAll("[" + HIDE + "]").forEach((el) => el.removeAttribute(HIDE));
           document.querySelectorAll("[" + COL + "]").forEach((el) => el.removeAttribute(COL));
           document.querySelectorAll("[" + ANC + "]").forEach((el) => el.removeAttribute(ANC));
+          document.querySelectorAll("[" + FORM + "]").forEach((el) => el.removeAttribute(FORM));
+          document.querySelectorAll("[" + CARD + "]").forEach((el) => el.removeAttribute(CARD));
+          document.querySelectorAll("[" + REQUIRED + "]").forEach((el) => el.removeAttribute(REQUIRED));
+          clearFooterMarks();
           // Undo our login dark swap so the logged-in app keeps FB's own theme.
           if (html.hasAttribute("data-carrier-darkswap")) {
             html.classList.replace("__fb-dark-mode", "__fb-light-mode");
@@ -814,22 +1150,68 @@
       }
       const form = pass.closest("form");
       if (!form) return;
+      document.querySelectorAll("[" + FORM + "]").forEach((el) => {
+        if (el !== form) el.removeAttribute(FORM);
+      });
+      form.setAttribute(FORM, "");
+      let card = form;
+      for (let i = 0; i < 4 && card.parentElement; i++) {
+        const parent = card.parentElement;
+        if (parent === document.body || parent.getBoundingClientRect().width >= window.innerWidth * 0.92) break;
+        if (isFooterContainer(parent, form)) break;
+        if (linksOutside(parent, form).length > 4) break;
+        card = parent;
+      }
+      document.querySelectorAll("[" + CARD + "]").forEach((el) => {
+        if (el !== card) el.removeAttribute(CARD);
+      });
+      card.setAttribute(CARD, "");
       // Climb to the column that holds the login card (the widest box that
       // still isn't basically the full viewport width).
-      let col = form;
+      let col = card;
       while (
         col.parentElement &&
         col.parentElement !== document.body &&
-        col.parentElement.getBoundingClientRect().width < window.innerWidth * 0.92
+        col.parentElement.getBoundingClientRect().width < window.innerWidth * 0.92 &&
+        !isFooterContainer(col.parentElement, form) &&
+        linksOutside(col.parentElement, form).length <= 4
       ) {
         col = col.parentElement;
       }
+      document.querySelectorAll("[" + COL + "]").forEach((el) => {
+        if (el !== col) el.removeAttribute(COL);
+      });
+      document.querySelectorAll("[" + ANC + "]").forEach((el) => el.removeAttribute(ANC));
+      for (let node = col; node && node !== document.body; node = node.parentElement) {
+        node.removeAttribute(HIDE);
+        node.removeAttribute(FOOTER_LINKS);
+      }
+      form.querySelectorAll("[" + HIDE + "], [" + FOOTER_LINKS + "]").forEach((el) => {
+        el.removeAttribute(HIDE);
+        el.removeAttribute(FOOTER_LINKS);
+      });
       if (!col.hasAttribute(COL)) col.setAttribute(COL, "");
+      html.setAttribute("data-carrier-login-vw", String(Math.round(window.innerWidth)));
+      html.setAttribute("data-carrier-login-vh", String(Math.round(window.innerHeight)));
+      html.setAttribute("data-carrier-login-col-w", String(Math.round(col.getBoundingClientRect().width)));
+      html.setAttribute("data-carrier-login-card-w", String(Math.round(card.getBoundingClientRect().width)));
+      html.setAttribute("data-carrier-login-form-w", String(Math.round(form.getBoundingClientRect().width)));
+      restoreRequiredLoginUi();
+      tidyFooter(col);
       // Hide every sibling of the login column, up the ancestor chain, and mark
       // the ancestor wrappers so their (often white) backgrounds can be cleared.
       let node = col;
       while (node && node.parentElement && node !== document.body) {
         for (const sib of node.parentElement.children) {
+          if (sib !== node && sib.hasAttribute(FOOTER)) {
+            sib.removeAttribute(HIDE);
+            continue;
+          }
+          if (sib !== node && isRequiredLoginUi(sib)) {
+            sib.removeAttribute(HIDE);
+            sib.setAttribute(REQUIRED, "");
+            continue;
+          }
           if (sib !== node && !sib.hasAttribute(HIDE) && !sib.hasAttribute(COL)) {
             sib.setAttribute(HIDE, "");
           }
@@ -845,17 +1227,21 @@
         el.removeAttribute("data-carrier-cleared-bg");
       }
       if (dark) {
+        const clearLight = (el) => {
+          if (!isLightFill(getComputedStyle(el).backgroundColor)) return;
+          el.setAttribute("data-carrier-cleared-bg", "");
+          el.style.setProperty("background-color", "transparent", "important");
+        };
+        // Large light backdrops anywhere — the ancestor wrappers behind the card.
         for (const el of document.body.querySelectorAll("*")) {
           const r = el.getBoundingClientRect();
-          if (
-            r.width >= window.innerWidth * 0.6 &&
-            r.height >= window.innerHeight * 0.5 &&
-            isLightFill(getComputedStyle(el).backgroundColor)
-          ) {
-            el.setAttribute("data-carrier-cleared-bg", "");
-            el.style.setProperty("background-color", "transparent", "important");
-          }
+          if (r.width >= window.innerWidth * 0.6 && r.height >= window.innerHeight * 0.5) clearLight(el);
         }
+        // Light bands *inside* the login column (e.g. the logo/title header),
+        // which the size heuristic above misses at narrow/tall window shapes.
+        // Safe: isLightFill only matches near-white opaque fills, so FB's dark
+        // inputs and the blue submit button are left untouched.
+        for (const el of col.querySelectorAll("*")) clearLight(el);
       }
     }
 
@@ -872,6 +1258,11 @@
     schedule();
     new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
     window.addEventListener("carrier:settings", schedule);
+    // The language strip can mount slightly after our first pass, so re-run on
+    // resize and a couple of short delays after load (cheap; tidy() no-ops off
+    // the login page).
+    window.addEventListener("resize", schedule);
+    for (const delay of [300, 1200]) setTimeout(schedule, delay);
     if (window.matchMedia) {
       window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", schedule);
     }
