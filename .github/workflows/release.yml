@@ -183,19 +183,30 @@ jobs:
       # are pure release-page clutter — drop them before the release goes public.
       # latest.json and every bundle are kept, so auto-update is unaffected.
       - name: Remove vestigial .sig assets
+        # Cosmetic cleanup — never block the release on it.
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          # The release is still a draft at this point, and GET /releases/tags/{tag}
+          # only returns *published* releases (404 on a draft). List all releases
+          # (draft-aware) and match the tag to get the numeric release id instead.
           # Built-in env vars, not a GitHub Actions template expansion — keeps a
           # crafted tag name from injecting shell code into this run script.
           # (No literal Actions expression in this comment: it would be
           # interpolated, and an empty one fails the whole workflow.)
-          ids=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" \
-            --jq '.assets[] | select(.name | endswith(".sig")) | .id')
+          rel_id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id" | head -n1)
+          if [ -z "$rel_id" ]; then
+            echo "No release found for $GITHUB_REF_NAME; nothing to clean."
+            exit 0
+          fi
+          ids=$(gh api "repos/$GITHUB_REPOSITORY/releases/$rel_id/assets" --paginate \
+            --jq '.[] | select(.name | endswith(".sig")) | .id')
           for id in $ids; do
             echo "Deleting .sig asset $id"
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$id"
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$id" || true
           done
 
       - name: Publish release
