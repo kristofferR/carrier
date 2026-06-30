@@ -295,11 +295,30 @@ fn clear_pending_webview_data(app: &tauri::AppHandle) {
 // Tray
 // ---------------------------------------------------------------------------
 
+fn reveal_window(window: &WebviewWindow) {
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+}
+
 fn show_main(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+        reveal_window(&window);
+        return;
+    }
+
+    if app
+        .state::<AppState>()
+        .recreating
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return;
+    }
+
+    let settings = app.state::<AppState>().settings.lock().unwrap().clone();
+    if let Ok(window) = build_app_window(app, "main", &settings) {
+        install_main_close_handler(app, &window);
+        reveal_window(&window);
     }
 }
 
@@ -312,10 +331,26 @@ fn toggle_main(app: &tauri::AppHandle) {
         if visible && focused {
             let _ = window.hide();
         } else {
-            let _ = window.show();
-            let _ = window.unminimize();
-            let _ = window.set_focus();
+            reveal_window(&window);
         }
+    } else {
+        show_main(app);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn has_visible_messenger_window(app: &tauri::AppHandle) -> bool {
+    app.webview_windows().into_iter().any(|(label, window)| {
+        label != "settings"
+            && window.is_visible().unwrap_or(false)
+            && !window.is_minimized().unwrap_or(false)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn reopen_main_if_needed(app: &tauri::AppHandle, has_visible_windows: bool) {
+    if !has_visible_windows || !has_visible_messenger_window(app) {
+        show_main(app);
     }
 }
 
@@ -325,16 +360,38 @@ fn wants_tray(s: &Settings) -> bool {
     s.show_tray || s.menu_bar_only
 }
 
+fn build_tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let quit_item = MenuItem::with_id(app, "quit", "Quit Carrier", true, None::<&str>)?;
+    Menu::with_items(app, &[&quit_item])
+}
+
+#[cfg(target_os = "macos")]
+fn show_tray_menu(app: &tauri::AppHandle) {
+    let Some(window) = target_window(app).or_else(|| app.get_webview_window("main")) else {
+        return;
+    };
+    if let Ok(menu) = build_tray_menu(app) {
+        let _ = window.popup_menu(&menu);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn tray_unread_title(s: &Settings, unread: i64) -> Option<String> {
+    if s.unread_badge && unread > 0 {
+        Some(unread.to_string())
+    } else {
+        None
+    }
+}
+
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<TrayIcon> {
     // Left-click toggles the window; right-click offers only Quit (showing is the
     // click itself, so a separate "Open" item would be redundant).
-    let quit_item = MenuItem::with_id(app, "quit", "Quit Carrier", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&quit_item])?;
+    let menu = build_tray_menu(app)?;
 
-    TrayIconBuilder::with_id("carrier-tray")
+    let builder = TrayIconBuilder::with_id("carrier-tray")
         .tooltip(APP_TITLE)
         .icon(app.default_window_icon().expect("bundled icon").clone())
-        .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {
             if event.id.as_ref() == "quit" {
@@ -343,15 +400,28 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<TrayIcon> {
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
+                button,
+                button_state,
                 ..
             } = event
             {
-                toggle_main(tray.app_handle());
+                match (button, button_state) {
+                    (MouseButton::Left, MouseButtonState::Up) => toggle_main(tray.app_handle()),
+                    #[cfg(target_os = "macos")]
+                    (MouseButton::Right, MouseButtonState::Down) => {
+                        show_tray_menu(tray.app_handle());
+                    }
+                    _ => {}
+                }
             }
-        })
-        .build(app)
+        });
+
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.menu(&menu);
+    #[cfg(target_os = "macos")]
+    let _ = &menu;
+
+    builder.build(app)
 }
 
 /// Register or unregister Start on System Startup with the OS. Kept separate so
@@ -1956,13 +2026,21 @@ pub fn run() {
             let h = app.handle().clone();
             app.listen_any("carrier:unread", move |event| {
                 let n: i64 = event.payload().trim().parse().unwrap_or(0);
-                if let Some(tray) = h.state::<AppState>().tray.lock().unwrap().as_ref() {
-                    let tip = if n > 0 {
-                        format!("{APP_TITLE} — {n} unread")
+                let state = h.state::<AppState>();
+                let settings = state.settings.lock().unwrap().clone();
+                let tray_n = if settings.unread_badge { n } else { 0 };
+                let tray = state.tray.lock().unwrap();
+                if let Some(tray) = tray.as_ref() {
+                    let tip = if tray_n > 0 {
+                        format!("{APP_TITLE} — {tray_n} unread")
                     } else {
                         APP_TITLE.to_string()
                     };
                     let _ = tray.set_tooltip(Some(&tip));
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = tray.set_title(tray_unread_title(&settings, tray_n));
+                    }
                 }
             });
 
@@ -1994,6 +2072,15 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Ready = event {
                 setup_macos_notifications(app);
+            }
+
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } = event
+            {
+                reopen_main_if_needed(app, has_visible_windows);
             }
 
             // A theme switch destroys and rebuilds the windows; don't let the
@@ -2345,6 +2432,26 @@ mod tests {
             ..Default::default()
         };
         assert!(!wants_tray(&s), "no tray when both are off");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tray_unread_title_shows_positive_counts_when_badges_enabled() {
+        assert_eq!(
+            tray_unread_title(&Settings::default(), 7),
+            Some("7".to_string())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tray_unread_title_clears_zero_and_disabled_badges() {
+        assert_eq!(tray_unread_title(&Settings::default(), 0), None);
+        let s = Settings {
+            unread_badge: false,
+            ..Default::default()
+        };
+        assert_eq!(tray_unread_title(&s, 7), None);
     }
 
     // -----------------------------------------------------------------------
