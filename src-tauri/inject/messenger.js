@@ -190,6 +190,26 @@
     }
   };
 
+  const GENERIC_DOWNLOAD_STEMS = new Set(["download", "image", "video"]);
+
+  const splitDownloadName = (name) => {
+    const file = String(name || "").trim().split(/[\\/]/).pop() || "";
+    const dot = file.lastIndexOf(".");
+    if (dot > 0 && dot < file.length - 1) {
+      return { stem: file.slice(0, dot), ext: file.slice(dot) };
+    }
+    return { stem: file, ext: "" };
+  };
+
+  const friendlyDownloadName = (name) => {
+    const { stem, ext } = splitDownloadName(name);
+    if (!stem || GENERIC_DOWNLOAD_STEMS.has(stem.toLowerCase())) {
+      // Keep the basename stable; Rust `unique_path` owns "(n)" de-duping.
+      return `Messenger${ext}`;
+    }
+    return name;
+  };
+
   // Download a media src by letting the WebView initiate the download, which the
   // Rust `on_download` handler then writes to Downloads. (Custom commands can't
   // be called from the remote Facebook origin, only plugins / WebView hooks.)
@@ -202,7 +222,7 @@
     const blob = await res.blob();
     if (blob.size > MAX_BLOB) throw new Error("file too large");
     const href = URL.createObjectURL(blob);
-    let name = filenameFromUrl(src) || fallbackName;
+    let name = friendlyDownloadName(filenameFromUrl(src) || fallbackName);
     if (!name.includes(".")) {
       const ext = ((blob.type || "").split("/")[1] || "").split(";")[0];
       if (ext) name += "." + ext;

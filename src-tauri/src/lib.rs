@@ -2261,6 +2261,29 @@ mod tests {
         assert_eq!(filename_from_url(&u("https://x.com/")), "download");
     }
 
+    #[test]
+    fn unique_path_preserves_stem_and_extension() {
+        let dir = std::env::temp_dir().join(format!(
+            "carrier-unique-path-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let first = dir.join("Messenger.jpeg");
+        let second = dir.join("Messenger (1).jpeg");
+        let third = dir.join("Messenger (2).jpeg");
+        std::fs::write(&first, b"").unwrap();
+        assert_eq!(unique_path(first.clone()), second);
+        std::fs::write(&second, b"").unwrap();
+        assert_eq!(unique_path(first), third);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     // -----------------------------------------------------------------------
     // is_unsafe_download  (new in this PR)
     // -----------------------------------------------------------------------
