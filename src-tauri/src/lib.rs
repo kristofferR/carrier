@@ -348,8 +348,13 @@ fn has_visible_messenger_window(app: &tauri::AppHandle) -> bool {
 }
 
 #[cfg(target_os = "macos")]
+fn should_reopen_main(has_visible_windows: bool, has_visible_messenger_window: bool) -> bool {
+    !has_visible_windows || !has_visible_messenger_window
+}
+
+#[cfg(target_os = "macos")]
 fn reopen_main_if_needed(app: &tauri::AppHandle, has_visible_windows: bool) {
-    if !has_visible_windows || !has_visible_messenger_window(app) {
+    if should_reopen_main(has_visible_windows, has_visible_messenger_window(app)) {
         show_main(app);
     }
 }
@@ -2433,6 +2438,24 @@ mod tests {
             ..Default::default()
         };
         assert!(!wants_tray(&s), "no tray when both are off");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dock_reopen_shows_main_when_no_windows_are_visible() {
+        assert!(should_reopen_main(false, false));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dock_reopen_shows_main_when_only_settings_is_visible() {
+        assert!(should_reopen_main(true, false));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dock_reopen_does_not_reload_when_messenger_window_is_visible() {
+        assert!(!should_reopen_main(true, true));
     }
 
     #[cfg(target_os = "macos")]
