@@ -53,6 +53,12 @@ On `main` (committed `d8a25a6`).
   when a new session prompts for it.**
 - **A "Carrier (debug)" build must be RUNNING** for the tools to connect — build it
   with the command above, then `ditto` it into `/Applications`.
+- For Hide Names & Avatars selector work, first run the dev-only sanitized probe
+  through MCP `execute_js` with code `__carrier_mcp_privacy_probe__`. It reports
+  live Messenger selector hits, rectangles, computed `filter`, and sanitized
+  ancestor/attribute shapes; it must not expose message text, raw numeric IDs,
+  image URLs, or `alt` / `aria-label` contents. Prefer extending this probe over
+  guessing selectors or dumping raw DOM when debugging privacy blur coverage.
 
 ---
 

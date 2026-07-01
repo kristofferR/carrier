@@ -713,14 +713,356 @@
   };
 
   /* ----------------------- Hide names & avatars ------------------------- */
-  // Toggle a marker attribute the injected CSS keys off of to blur contact
+  // Toggle marker attributes the injected CSS keys off of to blur contact
   // names and avatars (Settings / View ▸ Hide Names & Avatars / Cmd+Shift+N).
+  // Facebook's generated class names churn, so this keeps the selectors shallow
+  // and marks identity surfaces by stable roles, links, and layout shape.
   (function hideNames() {
-    const apply = () => {
-      document.documentElement.toggleAttribute(
-        "data-carrier-hide-names",
-        window.__CARRIER_SETTINGS__?.hide_names_avatars === true,
+    const IDENTITY_ATTR = "data-carrier-private-identity";
+    const WRAPPER_ATTR = "data-carrier-private-wrapper";
+    const THREAD_ROW_SEL = '[role="grid"] a[href*="/t/"], [role="navigation"] a[href*="/t/"]';
+    const TEXT_SURFACE_SEL = "span, div, h1, h2, h3, h4";
+    const VISUAL_SEL = 'img, svg, image, [style*="background-image"]';
+    const PREVIEW_NAME_RE = /^([^:]{1,40}):(?=\s|$)/;
+    const PREVIEW_EVENT_RE =
+      /^(.{1,40}?)(?=\s+(?:sent|replied|reacted|liked|laughed|loved|mentioned|shared|left|joined|added|removed|changed|created|named|started)\b)/i;
+    const html = document.documentElement;
+    let observer = null;
+    let pending = false;
+    let suppressMutations = false;
+
+    const on = () => window.__CARRIER_SETTINGS__?.hide_names_avatars === true;
+
+    function textValue(el) {
+      return (el?.textContent || "").replace(/\s+/g, " ").trim();
+    }
+
+    function visible(el) {
+      const r = el?.getBoundingClientRect?.();
+      if (!r || r.width <= 0 || r.height <= 0) return false;
+      const cs = getComputedStyle(el);
+      return cs.display !== "none" && cs.visibility !== "hidden";
+    }
+
+    function mark(el) {
+      if (el?.setAttribute) el.setAttribute(IDENTITY_ATTR, "");
+    }
+
+    function unwrap(el) {
+      const parent = el?.parentNode;
+      if (!parent) return;
+      parent.replaceChild(document.createTextNode(el.textContent || ""), el);
+      parent.normalize?.();
+    }
+
+    function clearMarkers() {
+      document.querySelectorAll("[" + WRAPPER_ATTR + "]").forEach(unwrap);
+      document.querySelectorAll("[" + IDENTITY_ATTR + "]").forEach((el) => {
+        el.removeAttribute(IDENTITY_ATTR);
+      });
+    }
+
+    function isMetaText(value) {
+      return (
+        !value ||
+        /^(\d+\s*(?:s|m|h|d|w|mo|y)|now|just now)$/i.test(value) ||
+        /^(sun|mon|tue|wed|thu|fri|sat)$/i.test(value) ||
+        /^[·•.,\s\d]+$/.test(value)
       );
+    }
+
+    function textLeaves(root) {
+      const out = [];
+      root.querySelectorAll?.(TEXT_SURFACE_SEL).forEach((el) => {
+        if (!visible(el) || el.closest?.('[contenteditable="true"]')) return;
+        if (!textValue(el)) return;
+        for (const child of el.children || []) {
+          if (textValue(child)) return;
+        }
+        out.push(el);
+      });
+      return out.sort((a, b) => {
+        const ar = a.getBoundingClientRect();
+        const br = b.getBoundingClientRect();
+        return ar.y - br.y || ar.x - br.x;
+      });
+    }
+
+    function textSurfaces(root) {
+      const out = [];
+      root.querySelectorAll?.(TEXT_SURFACE_SEL).forEach((el) => {
+        if (!visible(el) || el.closest?.('[contenteditable="true"]')) return;
+        if (!textValue(el)) return;
+        out.push(el);
+      });
+      return out.sort((a, b) => {
+        const ar = a.getBoundingClientRect();
+        const br = b.getBoundingClientRect();
+        return ar.y - br.y || ar.x - br.x || ar.height - br.height;
+      });
+    }
+
+    function area(el) {
+      const r = el.getBoundingClientRect();
+      return r.width * r.height;
+    }
+
+    function deepest(elements) {
+      return elements.filter((el) => !elements.some((other) => other !== el && el.contains(other)));
+    }
+
+    function markDeepest(elements) {
+      let count = 0;
+      deepest(elements)
+        .sort((a, b) => {
+          const ar = a.getBoundingClientRect();
+          const br = b.getBoundingClientRect();
+          return ar.x - br.x || area(a) - area(b);
+        })
+        .forEach((el) => {
+          if (isMetaText(textValue(el))) return;
+          mark(el);
+          count += 1;
+        });
+      return count > 0;
+    }
+
+    function previewIdentity(value) {
+      const colon = value.match(PREVIEW_NAME_RE);
+      const event = colon ? null : value.match(PREVIEW_EVENT_RE);
+      const match = colon || event;
+      if (!match) return null;
+
+      const prefix = match[1].trim();
+      if (!prefix || prefix.length < 2 || /^(you|du|me|meg)$/i.test(prefix)) return null;
+      if (/[\d:;!?]/.test(prefix)) return null;
+      return { prefix, colon: !!colon };
+    }
+
+    function markPreviewSenderPrefix(el) {
+      const value = textValue(el);
+      const identity = previewIdentity(value);
+      if (!identity) return false;
+
+      const candidates = [el, ...textSurfaces(el)]
+        .filter((candidate, index, all) => all.indexOf(candidate) === index)
+        .filter((candidate) => {
+          const candidateText = textValue(candidate);
+          if (!candidateText) return false;
+          if (candidateText === identity.prefix) return true;
+          if (identity.colon && candidateText === identity.prefix + ":") return true;
+          return false;
+        })
+        .sort((a, b) => area(a) - area(b));
+
+      if (candidates.length) {
+        mark(candidates[0]);
+        return true;
+      }
+
+      if (wrapPreviewPrefix(el, identity)) return true;
+
+      // Some Messenger system previews render as one native text element, for
+      // example "Name left the group". Blur that element as identity-adjacent
+      // metadata while leaving normal "Name: message" previews readable unless
+      // Messenger gives us a separate native element for just the name.
+      if (!identity.colon && value.length <= 90) {
+        mark(el);
+        return true;
+      }
+
+      return false;
+    }
+
+    function wrapPreviewPrefix(el, identity) {
+      const needle = identity.prefix + (identity.colon ? ":" : "");
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          if (!node.nodeValue?.trim()) return NodeFilter.FILTER_REJECT;
+          const parent = node.parentElement;
+          if (!parent || parent.closest("[" + WRAPPER_ATTR + "]") || parent.closest("abbr")) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        },
+      });
+
+      let node;
+      while ((node = walker.nextNode())) {
+        const text = node.nodeValue || "";
+        const start = text.search(/\S/);
+        if (start < 0) continue;
+        if (text.slice(start, start + needle.length) === needle) {
+          return wrapTextRange(node, start, needle.length);
+        }
+        if (!identity.colon && text.slice(start, start + identity.prefix.length) === identity.prefix) {
+          return wrapTextRange(node, start, identity.prefix.length);
+        }
+      }
+      return false;
+    }
+
+    function wrapTextRange(node, start, length) {
+      const parent = node.parentNode;
+      const text = node.nodeValue || "";
+      if (!parent || length <= 0 || start < 0 || start + length > text.length) return false;
+
+      const fragment = document.createDocumentFragment();
+      const before = text.slice(0, start);
+      const selected = text.slice(start, start + length);
+      const after = text.slice(start + length);
+      if (before) fragment.appendChild(document.createTextNode(before));
+
+      const span = document.createElement("span");
+      span.setAttribute(IDENTITY_ATTR, "");
+      span.setAttribute(WRAPPER_ATTR, "");
+      span.textContent = selected;
+      fragment.appendChild(span);
+
+      if (after) fragment.appendChild(document.createTextNode(after));
+      parent.replaceChild(fragment, node);
+      return true;
+    }
+
+    function markConversationRows() {
+      const seen = new Set();
+      for (const row of document.querySelectorAll(THREAD_ROW_SEL)) {
+        const href = row.getAttribute("href") || "";
+        if (!href || seen.has(href) || !visible(row)) continue;
+        seen.add(href);
+
+        const rr = row.getBoundingClientRect();
+        row.querySelectorAll(VISUAL_SEL).forEach((el) => {
+          if (!visible(el)) return;
+          const r = el.getBoundingClientRect();
+          const leftAvatar = r.left < rr.left + 80 && r.width >= 20 && r.height >= 20;
+          const rightReceipt =
+            r.right > rr.right - 56 && r.width >= 12 && r.width <= 34 && r.height >= 12 && r.height <= 34;
+          if (leftAvatar || rightReceipt) mark(el);
+        });
+
+        const surfaces = textSurfaces(row).filter((el) => {
+          if (el.getAttribute("aria-hidden") === "true") return false;
+          if (el.closest("abbr")) return false;
+          const r = el.getBoundingClientRect();
+          return r.left > rr.left + 56;
+        });
+        if (!surfaces.length) continue;
+
+        const firstLineY = Math.min(...surfaces.map((el) => el.getBoundingClientRect().top));
+        const firstLine = [];
+        surfaces.forEach((el) => {
+          const r = el.getBoundingClientRect();
+          if (Math.abs(r.top - firstLineY) < 4 && r.height <= 24) firstLine.push(el);
+          else if (r.top > firstLineY + 8 && r.height <= 24) markPreviewSenderPrefix(el);
+        });
+        markDeepest(firstLine);
+      }
+    }
+
+    function mainPane() {
+      return document.querySelector('[role="main"]') || document.querySelector("main");
+    }
+
+    function markThreadHeader(main) {
+      const mr = main.getBoundingClientRect();
+      const headerBottom = mr.top + 96;
+      const actionStart = mr.right - 150;
+
+      textLeaves(main).forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.top >= mr.top && r.bottom <= headerBottom && r.left < actionStart) mark(el);
+      });
+
+      main.querySelectorAll(VISUAL_SEL).forEach((el) => {
+        if (!visible(el)) return;
+        const r = el.getBoundingClientRect();
+        if (r.top >= mr.top && r.bottom <= headerBottom && r.left < actionStart && r.width >= 20 && r.height >= 20) {
+          mark(el);
+        }
+      });
+    }
+
+    function markThreadMessages(main) {
+      main.querySelectorAll('[role="article"]').forEach((article) => {
+        article.querySelectorAll("h3, h3 *").forEach((el) => {
+          if (visible(el) && textValue(el)) mark(el);
+        });
+
+        article
+          .querySelectorAll('img[referrerpolicy="origin-when-cross-origin"], img[height="14"][width="14"][tabindex="-1"]')
+          .forEach((el) => {
+            if (visible(el)) mark(el);
+          });
+
+        textLeaves(article).forEach((el) => {
+          if (/\breplied to\b/i.test(textValue(el))) mark(el);
+        });
+      });
+
+      textSurfaces(main).forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.height <= 32 && r.width <= 420 && /\breplied to\b/i.test(textValue(el))) {
+          mark(el);
+        }
+      });
+    }
+
+    function scan() {
+      suppressMutations = true;
+      try {
+        clearMarkers();
+        if (!on()) return;
+        markConversationRows();
+        const main = mainPane();
+        if (main) {
+          markThreadHeader(main);
+          markThreadMessages(main);
+        }
+      } finally {
+        queueMicrotask(() => {
+          suppressMutations = false;
+        });
+      }
+    }
+
+    function schedule() {
+      if (suppressMutations || !on() || pending) return;
+      pending = true;
+      requestAnimationFrame(() => {
+        pending = false;
+        scan();
+      });
+    }
+
+    function start() {
+      if (observer) return;
+      observer = new MutationObserver(schedule);
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["aria-label", "href", "role", "src", "style"],
+      });
+      window.addEventListener("resize", schedule);
+    }
+
+    function stop() {
+      observer?.disconnect();
+      observer = null;
+      pending = false;
+      clearMarkers();
+      window.removeEventListener("resize", schedule);
+    }
+
+    const apply = () => {
+      html.toggleAttribute("data-carrier-hide-names", on());
+      if (on()) {
+        start();
+        schedule();
+      } else {
+        stop();
+      }
     };
     apply();
     window.addEventListener("carrier:settings", apply);

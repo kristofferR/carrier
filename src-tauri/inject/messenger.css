@@ -223,15 +223,35 @@ html.__fb-dark-mode[data-carrier-authtext] body a {
 }
 
 /* ----------------------- Hide names & avatars --------------------------- */
-/* Blur each conversation-list row (name, avatar and message preview) — handy
-   when screen-sharing or in a public space. Toggled by `data-carrier-hide-names`
-   (set in messenger.js from Settings, the View menu, or Cmd/Ctrl+Shift+N).
-   Blurring the whole row anchors only on the proven `a[href*="/t/"]` selector
-   the jump-to-chat shortcut uses — making no assumption about the row's internal
-   markup — so it stays robust as Facebook's class names churn. The blur is
-   cosmetic: rows stay clickable, so you can still navigate by position. */
+/* `messenger.js` marks identity surfaces with this data attribute so the blur
+   can stay narrow: conversation-list avatars/titles, active-thread header
+   identity, sender labels, reply attribution, and avatar/read-receipt images.
+   Message bodies and conversation-list previews remain readable. */
+html[data-carrier-hide-names] [data-carrier-private-identity] {
+  -webkit-filter: blur(6px) !important;
+  filter: blur(6px) !important;
+}
+
+/* Blur profile links in the main Messenger pane to hide the active thread
+   header name/avatar and any profile-linked in-thread sender avatars without
+   touching message text or media attachments. */
 html[data-carrier-hide-names]
-  :is([role="grid"], [role="navigation"]) a[href*="/t/"] {
+  :is(main, [role="main"]) a[href^="/"][href$="/"]:not([href*="/messages/"]),
+html[data-carrier-hide-names]
+  :is(main, [role="main"]) a[href*="/profile.php"] {
+  filter: blur(6px) !important;
+}
+
+html[data-carrier-hide-names]
+  :is(main, [role="main"]) img[referrerpolicy="origin-when-cross-origin"][style*="border-radius: 50%"] {
+  filter: blur(6px) !important;
+}
+
+/* Read receipts are tiny avatar images rendered inside the message article,
+   separate from sender/profile avatars. Keep this constrained to that 14px
+   receipt shape so message media and emoji sprites stay visible. */
+html[data-carrier-hide-names]
+  :is(main, [role="main"]) [role="article"] img[height="14"][width="14"][tabindex="-1"] {
   filter: blur(6px) !important;
 }
 
