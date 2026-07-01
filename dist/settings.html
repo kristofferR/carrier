@@ -93,6 +93,7 @@
         ["mute_notifications", "Mute Notifications", "Don't show desktop notifications for new messages."],
         ["hide_notification_preview", "Hide Message Preview", "Notify without the sender name or message text."],
         ["hide_names_avatars", "Hide Names & Avatars", "Blur contact names and avatars in the conversation list (Cmd/Ctrl+Shift+N)."],
+        ["system_emoji", "System Emoji", "Render emoji with your system's emoji font instead of Facebook's."],
         ["menu_bar_only", "Menu Bar Only", "macOS: hide the Dock icon and live in the menu bar (needs the tray)."],
         ["spellcheck", "Spell check", "Underline misspelled words while typing (applies on reload)."],
         ["multi_instance", "Multi Instance", "Allow more than one window (experimental, needs restart)."],
@@ -112,7 +113,7 @@
 
       const TABS = [
         { id: "general", label: "General", icon: ICONS.general,
-          fields: ["theme", "hide_names_avatars", "always_on_top", "hide_on_close", "spellcheck"] },
+          fields: ["theme", "hide_names_avatars", "system_emoji", "always_on_top", "hide_on_close", "spellcheck"] },
         { id: "tray", label: "Tray & Startup", icon: ICONS.tray,
           fields: ["show_tray", "start_to_tray", "autostart", "menu_bar_only"] },
         { id: "notifications", label: "Notifications", icon: ICONS.notifications,

@@ -104,6 +104,8 @@ struct Settings {
     hide_notification_preview: bool,
     /// Blur contact names and avatars (for screen-sharing / public spaces).
     hide_names_avatars: bool,
+    /// Render Facebook emoji sprites as native system emoji glyphs.
+    system_emoji: bool,
 }
 
 impl Default for Settings {
@@ -123,6 +125,7 @@ impl Default for Settings {
             mute_notifications: false,
             hide_notification_preview: false,
             hide_names_avatars: false,
+            system_emoji: false,
         }
     }
 }
@@ -2403,6 +2406,7 @@ mod tests {
         assert!(s.unread_badge, "unread_badge should default to true");
         assert_eq!(s.theme, "system", "theme should default to 'system'");
         assert!(!s.menu_bar_only, "menu_bar_only should default to false");
+        assert!(!s.system_emoji, "system_emoji should default to false");
     }
 
     // -----------------------------------------------------------------------

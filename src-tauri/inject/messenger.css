@@ -234,3 +234,33 @@ html[data-carrier-hide-names]
   :is([role="grid"], [role="navigation"]) a[href*="/t/"] {
   filter: blur(6px) !important;
 }
+
+/* ---------------------------- System emoji ----------------------------- */
+/* Facebook renders message emoji as CDN sprites. When the opt-in setting is on,
+   messenger.js marks those sprites and inserts a native text glyph beside each
+   one. CSS does the visual swap so React-owned DOM is disturbed as little as
+   possible. */
+html[data-carrier-system-emoji] [data-carrier-emoji-sprite] {
+  display: none !important;
+}
+
+[data-carrier-system-emoji-glyph] {
+  display: none !important;
+}
+
+html[data-carrier-system-emoji] [data-carrier-system-emoji-glyph] {
+  display: inline !important;
+  font-family:
+    "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Noto Color Emoji",
+    "Segoe UI Symbol",
+    system-ui,
+    sans-serif !important;
+  font-style: normal !important;
+  font-weight: 400 !important;
+  line-height: 1 !important;
+  text-decoration: none !important;
+  vertical-align: -0.1em !important;
+  white-space: nowrap !important;
+}

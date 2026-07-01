@@ -73,6 +73,8 @@ Electron app's RAM. The macOS build is Developer-ID signed and notarized.
 - **Force light / dark theme** — keep Messenger (and the window chrome, including
   the macOS title bar) light or dark regardless of the system theme, or follow
   the system.
+- **System emoji** — optionally render message emoji with your OS emoji font
+  instead of Facebook's emoji sprites.
 - **Jump to a conversation** — <kbd>Cmd/Ctrl</kbd>+<kbd>1</kbd>–<kbd>9</kbd> jumps
   to the Nth chat in the list.
 - **Toggle conversation info** — show or hide Messenger's conversation-info
@@ -93,8 +95,8 @@ Electron app's RAM. The macOS build is Developer-ID signed and notarized.
 - **Calls work** — camera/microphone are requested for Messenger voice & video.
 - **Remembers its window** — size and position persist between launches.
 - **Settings window** (<kbd>F3</kbd>) — theme, unread badge, hide names &
-  avatars, menu-bar mode, always-on-top, tray, start-to-tray, start on login,
-  hide-on-close, spell-check, and experimental multi-window.
+  avatars, system emoji, menu-bar mode, always-on-top, tray, start-to-tray, start
+  on login, hide-on-close, spell-check, and experimental multi-window.
 
 ## Keyboard shortcuts
 
