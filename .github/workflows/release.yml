@@ -12,12 +12,66 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # Generate the public-facing release copy before any build job touches the
+  # draft. The build matrix reuses these exact values so tauri-action cannot
+  # overwrite the release with a generic placeholder body.
+  prepare_release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_title: ${{ steps.notes.outputs.release_title }}
+      release_body: ${{ steps.notes.outputs.release_body }}
+    steps:
+      - name: Validate release ref
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "Release workflow must run on a v* tag; got ${GITHUB_REF}" >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Generate release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          node --check .github/scripts/generate-release-notes.mjs
+          node .github/scripts/generate-release-notes.mjs "$GITHUB_REF_NAME" release-notes.md
+
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TITLE: ${{ steps.notes.outputs.release_title }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --draft \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md
+          fi
+
   build:
+    needs: prepare_release
     strategy:
       fail-fast: false
       # Run targets one at a time: tauri-action's updater step reads the
@@ -96,8 +150,8 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "Carrier ${{ github.ref_name }}"
-          releaseBody: "Download the installer for your platform below."
+          releaseName: ${{ needs.prepare_release.outputs.release_title }}
+          releaseBody: ${{ needs.prepare_release.outputs.release_body }}
           releaseDraft: true
           prerelease: false
           # Versioned names; the publish job keeps the README's versioned
